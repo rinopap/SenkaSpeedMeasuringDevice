@@ -624,11 +624,11 @@ def _fix_window_size():
     """
     fam  = ui_cfg["font_family"]
     size = ui_cfg["font_size"]
-    # 基準テキスト：実際の表示に近い最大幅の文字列3行
+    # 基準テキスト：最長パターン（記録不足）で幅を確定する
     dummy = (
-        "・00:00~00:00 戦果時速 00.00\n"
-        "・00:00~00:00 戦果時速 00.00\n"
-        "・00:00~00:00 戦果時速 00.00"
+        "・00:00~00:00 戦果時速 記録不足\n"
+        "・00:00~00:00 戦果時速 記録不足\n"
+        "・00:00~00:00 戦果時速 記録不足"
     )
     label_speed.config(text=dummy, font=(fam, size + 2, "bold"))
     root.update_idletasks()
