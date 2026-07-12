@@ -27,11 +27,12 @@ else:
     BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
     SELF_PATH = os.path.abspath(__file__)
 
-DATA_DIR     = os.path.join(BASE_DIR, "74en_responses")
-CSV_FILE     = os.path.join(BASE_DIR, "exp_log.csv")
-SETUP_FLAG   = os.path.join(BASE_DIR, "first_setup_done.flag")
-CLEANUP_FLAG = os.path.join(BASE_DIR, "last_cleanup.flag")
-UI_CONFIG    = os.path.join(BASE_DIR, "ui_config.json")
+DATA_DIR      = os.path.join(BASE_DIR, "74en_responses")
+CSV_FILE      = os.path.join(BASE_DIR, "exp_log.csv")
+SHIP_CSV_FILE = os.path.join(BASE_DIR, "ship_exp_log.csv")
+SETUP_FLAG    = os.path.join(BASE_DIR, "first_setup_done.flag")
+CLEANUP_FLAG  = os.path.join(BASE_DIR, "last_cleanup.flag")
+UI_CONFIG     = os.path.join(BASE_DIR, "ui_config.json")
 
 _STARTUP_REG_KEY  = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _STARTUP_REG_NAME = "SenkaKeisoku"
@@ -235,6 +236,43 @@ def file_timestamp(path):
 def extract_exp(data):
     return data.get("api_data", {}).get("api_basic", {}).get("api_experience")
 
+def extract_ship_total_exp(data):
+    """全艦娘のapi_exp[0]を合計して艦娘総経験値を返す"""
+    ships = data.get("api_data", {}).get("api_ship", [])
+    if not ships:
+        return None
+    return sum(s.get("api_exp", [0])[0] for s in ships)
+
+# ------------------------------------------------------------------ #
+# 艦娘経験値キャッシュ
+# ------------------------------------------------------------------ #
+_ship_exp_cache: list = []
+
+def _load_ship_cache_from_csv():
+    global _ship_exp_cache
+    if not os.path.exists(SHIP_CSV_FILE):
+        _ship_exp_cache = []
+        return
+    out = []
+    with open(SHIP_CSV_FILE, "r", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            try:
+                out.append((datetime.fromisoformat(row["timestamp"]), int(row["ship_total_exp"])))
+            except Exception:
+                pass
+    out.sort(key=lambda x: x[0])
+    _ship_exp_cache = out
+
+def _append_ship_cache(timestamp: datetime, ship_total_exp: int):
+    new_file = not os.path.exists(SHIP_CSV_FILE)
+    with open(SHIP_CSV_FILE, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if new_file:
+            w.writerow(["timestamp", "ship_total_exp"])
+        w.writerow([timestamp.isoformat(), ship_total_exp])
+    _ship_exp_cache.append((timestamp, ship_total_exp))
+    _ship_exp_cache.sort(key=lambda x: x[0])
+
 # ------------------------------------------------------------------ #
 # 古いJSON削除（1時間に1回）
 # ------------------------------------------------------------------ #
@@ -296,12 +334,15 @@ def drain_file_queue():
         except queue.Empty:
             break
         try:
-            data = parse_api_file(path)
-            exp  = extract_exp(data)
-            ts   = file_timestamp(path)
+            data     = parse_api_file(path)
+            exp      = extract_exp(data)
+            ship_exp = extract_ship_total_exp(data)
+            ts       = file_timestamp(path)
             if exp is not None:
                 _append_cache(ts, exp)
                 updated = True
+            if ship_exp is not None:
+                _append_ship_cache(ts, ship_exp)
         except Exception as e:
             print("Error:", path, e)
     if updated:
@@ -354,6 +395,7 @@ def apply_theme(target_root=None):
 
     try:
         label_speed.configure(bg=t["label_bg"], fg=t["fg"], font=get_font(bold=True, size_delta=2))
+        label_ship_speed.configure(bg=t["label_bg"], fg=t["fg"], font=get_font(bold=True, size_delta=2))
         btn_settings.configure(bg=t["btn_bg"], fg=t["fg"],
                                activebackground=t["select_bg"], activeforeground=t["select_fg"])
     except Exception:
@@ -363,31 +405,60 @@ def apply_theme(target_root=None):
 # 表示更新
 # ------------------------------------------------------------------ #
 def recalc_all_display():
-    data = _exp_cache
-    if not data:
-        label_speed.config(text="データなし")
-        return
-
     now = datetime.now()
     h3 = now.replace(minute=0, second=0, microsecond=0)
     h2 = h3 - timedelta(hours=1)
     h1 = h3 - timedelta(hours=2)
-
-    r1 = get_first_record_in_hour(data, h1)
-    r2 = get_first_record_in_hour(data, h2)
-    r3 = get_first_record_in_hour(data, h3)
-    latest = data[-1]
-
-    s1    = calc_senka_speed(r1, r2)
-    s2    = calc_senka_speed(r2, r3)
-    s_now = calc_senka_speed(r3, latest)
-
     show = lambda v: "記録不足" if v is None else f"{v:.2f}"
-    label_speed.config(text=(
-        f"・{h1.strftime('%H:%M')}~{h2.strftime('%H:%M')} 戦果時速 {show(s1)}\n"
-        f"・{h2.strftime('%H:%M')}~{h3.strftime('%H:%M')} 戦果時速 {show(s2)}\n"
-        f"・{h3.strftime('%H:%M')}~{now.strftime('%H:%M')} 戦果時速 {show(s_now)}"
-    ))
+
+    # ---- 戦果時速 ----
+    data = _exp_cache
+    if not data:
+        label_speed.config(text="データなし")
+    else:
+        r1 = get_first_record_in_hour(data, h1)
+        r2 = get_first_record_in_hour(data, h2)
+        r3 = get_first_record_in_hour(data, h3)
+        latest = data[-1]
+        s1    = calc_senka_speed(r1, r2)
+        s2    = calc_senka_speed(r2, r3)
+        s_now = calc_senka_speed(r3, latest)
+        label_speed.config(text=(
+            f"・{h1.strftime('%H:%M')}~{h2.strftime('%H:%M')} 戦果時速 {show(s1)}\n"
+            f"・{h2.strftime('%H:%M')}~{h3.strftime('%H:%M')} 戦果時速 {show(s2)}\n"
+            f"・{h3.strftime('%H:%M')}~{now.strftime('%H:%M')} 戦果時速 {show(s_now)}"
+        ))
+
+    # ---- 艦娘経験値時速 ----
+    ship_data = _ship_exp_cache
+    if not ship_data:
+        label_ship_speed.config(text="データなし")
+    else:
+        sr1 = get_first_record_in_hour(ship_data, h1)
+        sr2 = get_first_record_in_hour(ship_data, h2)
+        sr3 = get_first_record_in_hour(ship_data, h3)
+        s_latest = ship_data[-1]
+
+        def calc_ship_speed(rec1, rec2):
+            if rec1 is None or rec2 is None:
+                return None
+            t1, e1 = rec1
+            t2, e2 = rec2
+            if t2 <= t1 or e2 < e1:
+                return None
+            hours = (t2 - t1).total_seconds() / 3600
+            return (e2 - e1) / hours if hours else None
+
+        ss1    = calc_ship_speed(sr1, sr2)
+        ss2    = calc_ship_speed(sr2, sr3)
+        ss_now = calc_ship_speed(sr3, s_latest)
+
+        show_ship = lambda v: "記録不足" if v is None else f"{v:,.0f}"
+        label_ship_speed.config(text=(
+            f"・{h1.strftime('%H:%M')}~{h2.strftime('%H:%M')} Exp時速 {show_ship(ss1)}\n"
+            f"・{h2.strftime('%H:%M')}~{h3.strftime('%H:%M')} Exp時速 {show_ship(ss2)}\n"
+            f"・{h3.strftime('%H:%M')}~{now.strftime('%H:%M')} Exp時速 {show_ship(ss_now)}"
+        ))
 
 
 # ------------------------------------------------------------------ #
@@ -596,12 +667,27 @@ root.resizable(False, False)
 
 all_themed_widgets: list = []
 
-# ---- ノートブックなし・直接ラベルを配置 ----
-label_speed = tk.Label(root, justify="left")
+# ---- ノートブック（タブ2枚）----
+notebook = ttk.Notebook(root)
+notebook.pack(side="top", fill="both", expand=True)
+
+# タブ1：戦果時速
+frame1 = ttk.Frame(notebook)
+notebook.add(frame1, text="戦果時速")
+
+label_speed = tk.Label(frame1, justify="left")
 label_speed.pack(padx=10, pady=8)
 all_themed_widgets.append(label_speed)
 
-# ダミーリスト（recalc_all_display互換用）
+# タブ2：艦娘経験値時速
+frame2 = ttk.Frame(notebook)
+notebook.add(frame2, text="艦娘Exp時速")
+
+label_ship_speed = tk.Label(frame2, justify="left")
+label_ship_speed.pack(padx=10, pady=8)
+all_themed_widgets.append(label_ship_speed)
+
+# ダミーリスト
 goal_entries   = []
 landing_labels = []
 
@@ -618,25 +704,21 @@ btn_settings = tk.Button(
 btn_settings.pack(side="right", anchor="se", padx=4, pady=2)
 
 def _fix_window_size():
-    """
-    ダミーテキストで描画してウィンドウサイズを固定する。
-    フォント変更後にも呼び出す。
-    """
     fam  = ui_cfg["font_family"]
     size = ui_cfg["font_size"]
-    # 基準テキスト：最長パターン（記録不足）で幅を確定する
+    # 最長パターン：艦娘Exp時速（数値が大きくカンマ付きになる）
     dummy = (
-        "・00:00~00:00 戦果時速 記録不足\n"
-        "・00:00~00:00 戦果時速 記録不足\n"
-        "・00:00~00:00 戦果時速 記録不足"
+        "・00:00~00:00 Exp時速 記録不足\n"
+        "・00:00~00:00 Exp時速 記録不足\n"
+        "・00:00~00:00 Exp時速 記録不足"
     )
     label_speed.config(text=dummy, font=(fam, size + 2, "bold"))
+    label_ship_speed.config(text=dummy, font=(fam, size + 2, "bold"))
     root.update_idletasks()
     w = root.winfo_reqwidth()
     h = root.winfo_reqheight()
     root.geometry(f"{w}x{h}")
     root.resizable(False, False)
-    # 表示をリセット
     recalc_all_display()
 
 # ------------------------------------------------------------------ #
@@ -644,8 +726,9 @@ def _fix_window_size():
 # ------------------------------------------------------------------ #
 ensure_initial_setup()
 _load_cache_from_csv()
+_load_ship_cache_from_csv()
 apply_theme()
-_fix_window_size()  # テキスト量に合わせてサイズ固定
+_fix_window_size()
 
 for _p in glob.glob(os.path.join(DATA_DIR, "*api_port@port.json")):
     try:
