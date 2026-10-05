@@ -675,16 +675,16 @@ notebook.pack(side="top", fill="both", expand=True)
 frame1 = ttk.Frame(notebook)
 notebook.add(frame1, text="戦果時速")
 
-label_speed = tk.Label(frame1, justify="left")
-label_speed.pack(padx=10, pady=8)
+label_speed = tk.Label(frame1, justify="left", anchor="w")
+label_speed.pack(anchor="w", padx=10, pady=8)
 all_themed_widgets.append(label_speed)
 
 # タブ2：艦娘経験値時速
 frame2 = ttk.Frame(notebook)
 notebook.add(frame2, text="艦娘Exp時速")
 
-label_ship_speed = tk.Label(frame2, justify="left")
-label_ship_speed.pack(padx=10, pady=8)
+label_ship_speed = tk.Label(frame2, justify="left", anchor="w")
+label_ship_speed.pack(anchor="w", padx=10, pady=8)
 all_themed_widgets.append(label_ship_speed)
 
 # ダミーリスト
@@ -703,22 +703,41 @@ btn_settings = tk.Button(
 )
 btn_settings.pack(side="right", anchor="se", padx=4, pady=2)
 
+# ウィンドウ固定サイズ（_fix_window_size後に確定する）
+_fixed_w: int = 0
+_fixed_h: int = 0
+
 def _fix_window_size():
+    """
+    最長テキストでラベルを描画してウィンドウサイズを確定し、
+    以降はそのサイズに固定する。フォント変更時も再呼び出し。
+    """
+    global _fixed_w, _fixed_h
     fam  = ui_cfg["font_family"]
     size = ui_cfg["font_size"]
-    # 最長パターン：艦娘Exp時速（数値が大きくカンマ付きになる）
+    font = (fam, size + 2, "bold")
+
+    # 最長パターンで両ラベルを一時描画してサイズを測る
     dummy = (
         "・00:00~00:00 Exp時速 記録不足\n"
         "・00:00~00:00 Exp時速 記録不足\n"
         "・00:00~00:00 Exp時速 記録不足"
     )
-    label_speed.config(text=dummy, font=(fam, size + 2, "bold"))
-    label_ship_speed.config(text=dummy, font=(fam, size + 2, "bold"))
+    label_speed.config(text=dummy,      font=font)
+    label_ship_speed.config(text=dummy, font=font)
+
+    # propagateをいったん許可してサイズを取得
+    root.pack_propagate(True)
     root.update_idletasks()
-    w = root.winfo_reqwidth()
-    h = root.winfo_reqheight()
-    root.geometry(f"{w}x{h}")
+    _fixed_w = root.winfo_reqwidth()
+    _fixed_h = root.winfo_reqheight()
+
+    # サイズを固定してそれ以上広がらないようにする
+    root.geometry(f"{_fixed_w}x{_fixed_h}")
     root.resizable(False, False)
+    root.pack_propagate(False)  # ← ウィジェットがウィンドウを引っ張るのを防ぐ
+
+    # 実際のデータで再描画
     recalc_all_display()
 
 # ------------------------------------------------------------------ #
