@@ -45,20 +45,20 @@ public partial class MainWindow : Window
     {
         if (_captureSource is null)
         {
-            CaptureStatus.Text = $"CDP設定エラー: {_captureSetupError}";
+            SetCaptureStatus($"CDP設定エラー: {_captureSetupError}");
             return;
         }
         try
         {
             await _captureSource.StartAsync(CancellationToken.None);
             if (_captureSource is FileCaptureSource)
-                CaptureStatus.Text = $"74EN JSON監視: {_appDirectory}74en_responses";
+                SetCaptureStatus($"74EN JSON監視: {Path.Combine(_appDirectory, "74en_responses")}");
             else
-                CaptureStatus.Text = "CDP接続待機中";
+                SetCaptureStatus("CDP接続待機中");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            CaptureStatus.Text = "データ取得を開始できません";
+            SetCaptureStatus("データ取得を開始できません");
         }
     }
 
@@ -98,7 +98,7 @@ public partial class MainWindow : Window
     }
 
     private void OnCaptureStatusChanged(object? sender, string status) =>
-        Dispatcher.InvokeAsync(() => CaptureStatus.Text = status);
+        Dispatcher.InvokeAsync(() => SetCaptureStatus(status));
 
     private void OnResponseReceived(object? sender, ApiResponse response)
     {
@@ -125,10 +125,31 @@ public partial class MainWindow : Window
 
         Dispatcher.InvokeAsync(() =>
         {
-            CaptureStatus.Text = storageFailed ? "CSV書き込みエラー: データフォルダを確認してください" :
-                _settings.CdpEnabled ? "CDP接続中: 計測中" : "74EN JSON監視: 計測中";
+            SetCaptureStatus(storageFailed ? "CSV書き込みエラー: データフォルダを確認してください" :
+                _settings.CdpEnabled ? "CDP接続中: 計測中" : "74EN JSON監視: 計測中");
             RefreshDisplays();
         });
+    }
+
+    private void SetCaptureStatus(string details)
+    {
+        if (MainTabs.Template.FindName("CaptureStatus", MainTabs) is not System.Windows.Controls.TextBlock status)
+            return;
+
+        status.Text = details switch
+        {
+            _ when details.StartsWith("74EN JSON監視", StringComparison.Ordinal) => "74EN JSON監視",
+            _ when details.StartsWith("CDP接続中", StringComparison.Ordinal) && details.Contains("計測中", StringComparison.Ordinal) => "CDP計測中",
+            _ when details.StartsWith("CDP接続中", StringComparison.Ordinal) => "CDP接続中",
+            _ when details.StartsWith("CDP接続先を確認中", StringComparison.Ordinal) => "CDP確認中",
+            _ when details.StartsWith("CDP接続待機中", StringComparison.Ordinal) => "CDP待機中",
+            _ when details.StartsWith("CDP停止", StringComparison.Ordinal) => "CDP停止",
+            _ when details.StartsWith("CDP設定エラー", StringComparison.Ordinal) => "CDP設定エラー",
+            _ when details.StartsWith("CSV書き込みエラー", StringComparison.Ordinal) => "CSVエラー",
+            _ when details.Contains("開始できません", StringComparison.Ordinal) => "取得エラー",
+            _ => details
+        };
+        status.ToolTip = details;
     }
 
     private void RefreshDisplays()
@@ -172,7 +193,8 @@ public partial class MainWindow : Window
             var newSource = CreateCaptureSource(settings);
             SetCaptureSource(newSource);
             await newSource.StartAsync(CancellationToken.None);
-            CaptureStatus.Text = settings.CdpEnabled ? "CDP接続待機中" : $"74EN JSON監視: {_appDirectory}74en_responses";
+            SetCaptureStatus(settings.CdpEnabled ? "CDP接続待機中" :
+                $"74EN JSON監視: {Path.Combine(_appDirectory, "74en_responses")}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or
                                    ArgumentException or InvalidOperationException)
@@ -188,10 +210,6 @@ public partial class MainWindow : Window
         var family = new System.Windows.Media.FontFamily(settings.FontFamily);
         MainTabs.FontFamily = family;
         MainTabs.FontSize = settings.FontSize;
-        SettingsButton.FontFamily = family;
-        SettingsButton.FontSize = settings.FontSize;
-        CaptureStatus.FontFamily = family;
-        CaptureStatus.FontSize = Math.Max(9, settings.FontSize - 2);
         AdmiralDisplay.FontFamily = family;
         ShipDisplay.FontFamily = family;
         AdmiralDisplay.FontSize = settings.FontSize;
@@ -204,7 +222,6 @@ public partial class MainWindow : Window
         MainTabs.Background = new SolidColorBrush(background);
         AdmiralDisplay.Foreground = new SolidColorBrush(foreground);
         ShipDisplay.Foreground = new SolidColorBrush(foreground);
-        CaptureStatus.Foreground = new SolidColorBrush(foreground);
     }
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
