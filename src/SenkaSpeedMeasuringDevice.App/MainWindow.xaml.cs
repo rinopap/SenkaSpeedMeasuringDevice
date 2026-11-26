@@ -1,5 +1,8 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Media;
+using System.Windows.Threading;
+using Forms = System.Windows.Forms;
 using SenkaSpeedMeasuringDevice.Capture;
 using SenkaSpeedMeasuringDevice.Core;
 
@@ -12,30 +15,48 @@ public partial class MainWindow : Window
     private readonly List<ExperienceSample> _shipSamples;
     private readonly object _samplesLock = new();
     private readonly FileCaptureSource _captureSource;
+    private readonly Forms.NotifyIcon _trayIcon;
+    private readonly DispatcherTimer _displayTimer;
+    private AppSettings _settings;
+    private bool _exitRequested;
 
     public MainWindow()
     {
         InitializeComponent();
+        _settings = AppSettings.Load(Path.Combine(_appDirectory, "ui_config.json"));
         _admiralSamples = CsvStorage.Load(Path.Combine(_appDirectory, "exp_log.csv"), "admiral_exp").ToList();
         _shipSamples = CsvStorage.Load(Path.Combine(_appDirectory, "ship_exp_log.csv"), "ship_total_exp").ToList();
         _captureSource = new FileCaptureSource(Path.Combine(_appDirectory, "74en_responses"));
         _captureSource.ResponseReceived += OnResponseReceived;
-        Loaded += OnLoaded;
+        _captureSource.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+        _trayIcon = CreateTrayIcon();
+        _displayTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        _displayTimer.Tick += (_, _) => RefreshDisplays();
+        _displayTimer.Start();
+        Closing += OnClosing;
         Closed += OnClosed;
+        ApplySettings(_settings);
+        CaptureStatus.Text = $"74EN JSON監視: {_appDirectory}74en_responses";
         RefreshDisplays();
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs e)
+    private Forms.NotifyIcon CreateTrayIcon()
     {
-        try
+        var menu = new Forms.ContextMenuStrip();
+        menu.Items.Add("ウィンドウを開く", null, (_, _) => ShowWindow());
+        menu.Items.Add("設定", null, (_, _) => OpenSettings());
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        menu.Items.Add("終了", null, (_, _) => ExitApplication());
+        var icon = new Forms.NotifyIcon
         {
-            await _captureSource.StartAsync(CancellationToken.None);
-            CaptureStatus.Text = $"74EN JSON監視: {_appDirectory}74en_responses";
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            CaptureStatus.Text = "74EN JSON監視を開始できません";
-        }
+            Icon = System.Drawing.SystemIcons.Application,
+            Text = "戦果時速計測機",
+            ContextMenuStrip = menu,
+            Visible = true
+        };
+        icon.DoubleClick += (_, _) => ShowWindow();
+        return icon;
     }
 
     private void OnResponseReceived(object? sender, ApiResponse response)
@@ -82,6 +103,83 @@ public partial class MainWindow : Window
         ShipDisplay.Text = SenkaCalculator.FormatThreeHours(ships, now, ship: true);
     }
 
-    private async void OnClosed(object? sender, EventArgs e) => await _captureSource.DisposeAsync();
+    private void SettingsButton_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    private void OpenSettings()
+    {
+        var dialog = new SettingsWindow(_settings, WindowsStartup.IsEnabled()) { Owner = this };
+        dialog.SettingsApplied += OnSettingsApplied;
+        dialog.ShowDialog();
+    }
+
+    private void OnSettingsApplied(AppSettings settings, bool autoStart)
+    {
+        try
+        {
+            WindowsStartup.SetEnabled(autoStart);
+            settings.Save(Path.Combine(_appDirectory, "ui_config.json"));
+            _settings = settings;
+            ApplySettings(settings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            System.Windows.MessageBox.Show(this, $"設定を保存できませんでした。\n{ex.Message}", "設定エラー",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void ApplySettings(AppSettings settings)
+    {
+        Topmost = settings.AlwaysOnTop;
+        var family = new System.Windows.Media.FontFamily(settings.FontFamily);
+        MainTabs.FontFamily = family;
+        MainTabs.FontSize = settings.FontSize;
+        SettingsButton.FontFamily = family;
+        SettingsButton.FontSize = settings.FontSize;
+        CaptureStatus.FontFamily = family;
+        CaptureStatus.FontSize = Math.Max(9, settings.FontSize - 2);
+        AdmiralDisplay.FontFamily = family;
+        ShipDisplay.FontFamily = family;
+        AdmiralDisplay.FontSize = settings.FontSize;
+        ShipDisplay.FontSize = settings.FontSize;
+        var background = settings.DarkMode ? System.Windows.Media.Color.FromRgb(38, 38, 38) : Colors.White;
+        var foreground = settings.DarkMode ? System.Windows.Media.Color.FromRgb(240, 240, 240) : Colors.Black;
+        Background = new SolidColorBrush(background);
+        Foreground = new SolidColorBrush(foreground);
+        MainRoot.Background = new SolidColorBrush(background);
+        MainTabs.Background = new SolidColorBrush(background);
+        AdmiralDisplay.Foreground = new SolidColorBrush(foreground);
+        ShipDisplay.Foreground = new SolidColorBrush(foreground);
+        CaptureStatus.Foreground = new SolidColorBrush(foreground);
+    }
+
+    private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_exitRequested) return;
+        e.Cancel = true;
+        Hide();
+    }
+
+    private void ShowWindow()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void ExitApplication()
+    {
+        _exitRequested = true;
+        Close();
+    }
+
+    private async void OnClosed(object? sender, EventArgs e)
+    {
+        _displayTimer.Stop();
+        _trayIcon.Visible = false;
+        _trayIcon.Dispose();
+        await _captureSource.DisposeAsync();
+        System.Windows.Application.Current.Shutdown();
+    }
 }
 

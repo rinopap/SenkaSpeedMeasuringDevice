@@ -3,12 +3,12 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="戦果時速計測機" Height="210" Width="380"
         MinHeight="180" MinWidth="340" WindowStartupLocation="CenterScreen">
-    <Grid Margin="8">
+    <Grid x:Name="MainRoot" Margin="8">
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-        <TabControl Grid.Row="0">
+        <TabControl x:Name="MainTabs" Grid.Row="0">
             <TabItem Header="戦果時速">
                 <TextBlock x:Name="AdmiralDisplay" Margin="8" FontWeight="Bold" Text="データなし" />
             </TabItem>
@@ -18,8 +18,8 @@
         </TabControl>
         <TextBlock x:Name="CaptureStatus" Grid.Row="1" Margin="0,10,96,0"
                    VerticalAlignment="Center" Text="取得元を準備中" FontSize="10" TextTrimming="CharacterEllipsis" />
-        <Button Grid.Row="1" Content="⚙ 設定" Width="84" Margin="0,6,0,0"
-                HorizontalAlignment="Right" IsEnabled="False" />
+        <Button x:Name="SettingsButton" Grid.Row="1" Content="⚙ 設定" Width="84" Margin="0,6,0,0"
+                HorizontalAlignment="Right" Click="SettingsButton_Click" />
     </Grid>
 </Window>
 
