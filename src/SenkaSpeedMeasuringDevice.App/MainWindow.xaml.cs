@@ -14,10 +14,11 @@ public partial class MainWindow : Window
     private readonly List<ExperienceSample> _admiralSamples;
     private readonly List<ExperienceSample> _shipSamples;
     private readonly object _samplesLock = new();
-    private readonly FileCaptureSource _captureSource;
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly DispatcherTimer _displayTimer;
     private AppSettings _settings;
+    private ICaptureSource? _captureSource;
+    private string? _captureSetupError;
     private bool _exitRequested;
 
     public MainWindow()
@@ -26,19 +27,39 @@ public partial class MainWindow : Window
         _settings = AppSettings.Load(Path.Combine(_appDirectory, "ui_config.json"));
         _admiralSamples = CsvStorage.Load(Path.Combine(_appDirectory, "exp_log.csv"), "admiral_exp").ToList();
         _shipSamples = CsvStorage.Load(Path.Combine(_appDirectory, "ship_exp_log.csv"), "ship_total_exp").ToList();
-        _captureSource = new FileCaptureSource(Path.Combine(_appDirectory, "74en_responses"));
-        _captureSource.ResponseReceived += OnResponseReceived;
-        _captureSource.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
+        try { SetCaptureSource(CreateCaptureSource(_settings)); }
+        catch (ArgumentException ex) { _captureSetupError = ex.Message; }
 
         _trayIcon = CreateTrayIcon();
         _displayTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
         _displayTimer.Tick += (_, _) => RefreshDisplays();
         _displayTimer.Start();
+        Loaded += OnLoaded;
         Closing += OnClosing;
         Closed += OnClosed;
         ApplySettings(_settings);
-        CaptureStatus.Text = $"74EN JSON監視: {_appDirectory}74en_responses";
         RefreshDisplays();
+    }
+
+    private async void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        if (_captureSource is null)
+        {
+            CaptureStatus.Text = $"CDP設定エラー: {_captureSetupError}";
+            return;
+        }
+        try
+        {
+            await _captureSource.StartAsync(CancellationToken.None);
+            if (_captureSource is FileCaptureSource)
+                CaptureStatus.Text = $"74EN JSON監視: {_appDirectory}74en_responses";
+            else
+                CaptureStatus.Text = "CDP接続待機中";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            CaptureStatus.Text = "データ取得を開始できません";
+        }
     }
 
     private Forms.NotifyIcon CreateTrayIcon()
@@ -58,6 +79,26 @@ public partial class MainWindow : Window
         icon.DoubleClick += (_, _) => ShowWindow();
         return icon;
     }
+
+    private void SetCaptureSource(ICaptureSource source)
+    {
+        _captureSource = source;
+        _captureSetupError = null;
+        source.ResponseReceived += OnResponseReceived;
+        if (source is CdpCaptureSource cdp) cdp.StatusChanged += OnCaptureStatusChanged;
+    }
+
+    private ICaptureSource CreateCaptureSource(AppSettings settings)
+    {
+        if (!settings.CdpEnabled) return new FileCaptureSource(Path.Combine(_appDirectory, "74en_responses"));
+        var hosts = settings.CdpApiHosts.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var options = new CdpCaptureOptions(settings.CdpDebugPort, settings.CdpPageUrl,
+            new HashSet<string>(hosts, StringComparer.OrdinalIgnoreCase));
+        return new CdpCaptureSource(options);
+    }
+
+    private void OnCaptureStatusChanged(object? sender, string status) =>
+        Dispatcher.InvokeAsync(() => CaptureStatus.Text = status);
 
     private void OnResponseReceived(object? sender, ApiResponse response)
     {
@@ -84,7 +125,8 @@ public partial class MainWindow : Window
 
         Dispatcher.InvokeAsync(() =>
         {
-            CaptureStatus.Text = storageFailed ? "CSV書き込みエラー: データフォルダを確認してください" : "74EN JSON監視: 計測中";
+            CaptureStatus.Text = storageFailed ? "CSV書き込みエラー: データフォルダを確認してください" :
+                _settings.CdpEnabled ? "CDP接続中: 計測中" : "74EN JSON監視: 計測中";
             RefreshDisplays();
         });
     }
@@ -112,18 +154,30 @@ public partial class MainWindow : Window
         dialog.ShowDialog();
     }
 
-    private void OnSettingsApplied(AppSettings settings, bool autoStart)
+    private async void OnSettingsApplied(AppSettings settings, bool autoStart)
     {
         try
         {
-            WindowsStartup.SetEnabled(autoStart);
             settings.Save(Path.Combine(_appDirectory, "ui_config.json"));
-            _settings = settings;
+            WindowsStartup.SetEnabled(autoStart);
             ApplySettings(settings);
+            if (_captureSource is not null)
+            {
+                _captureSource.ResponseReceived -= OnResponseReceived;
+                if (_captureSource is CdpCaptureSource oldCdp) oldCdp.StatusChanged -= OnCaptureStatusChanged;
+                await _captureSource.DisposeAsync();
+                _captureSource = null;
+            }
+            _settings = settings;
+            var newSource = CreateCaptureSource(settings);
+            SetCaptureSource(newSource);
+            await newSource.StartAsync(CancellationToken.None);
+            CaptureStatus.Text = settings.CdpEnabled ? "CDP接続待機中" : $"74EN JSON監視: {_appDirectory}74en_responses";
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or
+                                   ArgumentException or InvalidOperationException)
         {
-            System.Windows.MessageBox.Show(this, $"設定を保存できませんでした。\n{ex.Message}", "設定エラー",
+            System.Windows.MessageBox.Show(this, $"設定またはデータ取得元を開始できませんでした。\n{ex.Message}", "設定エラー",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -178,7 +232,11 @@ public partial class MainWindow : Window
         _displayTimer.Stop();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
-        await _captureSource.DisposeAsync();
+        if (_captureSource is not null)
+        {
+            _captureSource.ResponseReceived -= OnResponseReceived;
+            await _captureSource.DisposeAsync();
+        }
         System.Windows.Application.Current.Shutdown();
     }
 }

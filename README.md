@@ -5,7 +5,7 @@
 - 仕様: [C_SHARP_MIGRATION_SPEC.md](docs/C_SHARP_MIGRATION_SPEC.md)
 - M-Phase 0 調査報告: [MIGRATION_M0_ASSESSMENT.md](docs/MIGRATION_M0_ASSESSMENT.md)
 
-M-Phase 1/2の実装とM-Phase 3の74EN JSON監視、M-Phase 4の基本Windows連携を実装しました。M3の実機完了確認として、74ENで保存先をこのアプリの`74en_responses`フォルダに指定する手動確認が残っています。CDP、74EN実機でのウィンドウ取り込み確認、長時間動作は後続工程です。
+M-Phase 1～4を実装し、M5の通常Edge CDP/HTTP成立性とM6のC# CDP取得元を、loopbackの合成通信で確認しました。実ゲーム、実74EN、HTTPS、ウィンドウ取り込み、長時間動作は未確認です。
 
 ## SDK
 
@@ -23,4 +23,8 @@ M2の詳細とテスト結果は[MIGRATION_M2_REPORT.md](MIGRATION_M2_REPORT.md)
 M3の実装状況、未検証事項と74EN手動確認手順は[MIGRATION_M3_REPORT.md](MIGRATION_M3_REPORT.md)を参照してください。
 
 M4の設定・トレイ・Windows自動起動と手動確認項目は[MIGRATION_M4_REPORT.md](MIGRATION_M4_REPORT.md)を参照してください。
+
+CDP検証の範囲と制約は[MIGRATION_M5_REPORT.md](MIGRATION_M5_REPORT.md)を参照してください。
+
+CDP取得元の統合範囲とテスト結果は[MIGRATION_M6_REPORT.md](MIGRATION_M6_REPORT.md)を参照してください。
 
