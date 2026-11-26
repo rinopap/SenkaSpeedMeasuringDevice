@@ -6,15 +6,15 @@
 ## 1. GitHubとローカル作業状態
 
 - 対象GitHubリポジトリは公開リポジトリ`rinopap/SenkaSpeedMeasuringDevice`。既定ブランチは`main`、GitHub上で確認できたブランチは`main`だけだった。
-- GitHub上に移行用の`develop-csharp`を`main`から作成した。`main`の内容は変更していない。C#移植はこのブランチで行う。
+- 調査開始時点のGitHubブランチは`main`だけだった。`main`から`develop-csharp`と`develop-cpp`を作成し、`main`は変更していない。C#移植とC++保全を別ブランチに分離した。
 - リポジトリの現在の`main`はPython/Tkinter版で、READMEは74ENのJSON保存先を入力として案内している。ソースは`SenkaSpeedMeasuringDevice.py`。
 - 現在のCodex作業フォルダと親の`Documents\Codex`はいずれもGit checkoutではなく、`.git`がない。したがって、このフォルダ内C++成果物についてローカルブランチ、コミット、未コミット差分をGitで識別できない。現ファイルをそのまま残し、変更の破棄・履歴書換えは行っていない。
-- C++版のGitHub上の基準ブランチ/コミットおよび`cpp-phase6-baseline`タグは存在を確認できなかったため、タグ付けは行っていない。現存C++ソースと過去の配布物はローカルに保持する。Phase 6自体が未完了なので、完了を示すタグ名も付けない。
+- 元の作業フォルダには`.git`がなく、過去のC++コミット履歴を復元できない。そのため`develop-cpp`には2026-11-26時点のソース・仕様・検証記録を`cpp/`以下へスナップショットとして保全した。これは履歴復元ではない。Phase 6は未完了なので`cpp-phase6-baseline`タグは作成しない。
 - 作業フォルダ内にはソースのほか、`bin/obj`を含むC#プローブ生成物、C++ビルド出力、配布ZIPの旧版が混在する。これらをC#製品へそのまま取り込まない。
 
 ## 2. 現行C++/Qt版の機能
 
-主な現行ソースは[`main.cpp`](../SenkaSpeedMeasuringDeviceCpp/main.cpp)、ビルド設定は[`CMakeLists.txt`](../SenkaSpeedMeasuringDeviceCpp/CMakeLists.txt)。単一のC++20/Qt 6 Widgets実行ファイルで、以下を持つ。
+保全した主なソースは[`cpp/main.cpp`](https://github.com/rinopap/SenkaSpeedMeasuringDevice/blob/develop-cpp/cpp/main.cpp)、ビルド設定は[`cpp/CMakeLists.txt`](https://github.com/rinopap/SenkaSpeedMeasuringDevice/blob/develop-cpp/cpp/CMakeLists.txt)。単一のC++20/Qt 6 Widgets実行ファイルで、以下を持つ。
 
 - 74ENが保存する`api_port@port` JSONファイルの監視、書き込み途中ファイルの再試行、イベント重複抑止。
 - JSON/`svdata=`/URLエンコード形式の解析、提督経験値・所持艦経験値合計の抽出。
@@ -38,7 +38,7 @@
 | 5: 独立通信取得 | 未完了 | ローカルHTTP/HTTPSプロキシ試験は本文一致等PASSの記録があるが、実ゲーム/74ENでは未検証。旧方式の手動検証手順は新仕様で停止。 |
 | 6: 74EN併用 | 未完了 | ローカル二段プロキシ/終了・再起動試験はPASSの記録がある。実74EN配布版、実ブラウザ、実通信、ウィンドウ取り込みの組合せは未検証。利用者は旧プローブをStep 7まで試したと報告。 |
 
-詳細記録: [`PHASE5_TECHNICAL_REVIEW.md`](../SenkaSpeedMeasuringDeviceCpp/PHASE5_TECHNICAL_REVIEW.md)、[`PHASE6_COEXISTENCE_REVIEW.md`](../SenkaSpeedMeasuringDeviceCpp/PHASE6_COEXISTENCE_REVIEW.md)。これらはローカル試験記録であり、実74EN互換性を示さない。
+詳細記録: [`PHASE5_TECHNICAL_REVIEW.md`](https://github.com/rinopap/SenkaSpeedMeasuringDevice/blob/develop-cpp/cpp/PHASE5_TECHNICAL_REVIEW.md)、[`PHASE6_COEXISTENCE_REVIEW.md`](https://github.com/rinopap/SenkaSpeedMeasuringDevice/blob/develop-cpp/cpp/PHASE6_COEXISTENCE_REVIEW.md)。これらはローカル試験記録であり、実74EN互換性を示さない。
 
 ## 4. 移植対象・再利用できる成果
 
@@ -80,7 +80,7 @@
 | CDP有効化がブラウザ/74ENの再起動や設定変更を要する | 自動変更せず、対象・範囲・復元手順を示して利用者の同意を得る。 |
 | CDP target管理が複雑（iframe、複数タブ、ブラウザ再起動） | M-Phase 5で小規模プローブにより成立条件を先行確認。実機接続前にローカル模擬サーバーで異常終了を確認。 |
 | Self-contained/WPFの配布サイズが大きい | 性能・配布サイズを測定して報告し、推測で軽量と断定しない。 |
-| 旧Phase 6パッケージにプロキシUIが残る | [`../README_CURRENT_STATUS.md`](../README_CURRENT_STATUS.md)で旧版と明示。C#版成果物として配布しない。 |
+| 旧Phase 6パッケージにプロキシUIが残る | [`../../README_CURRENT_STATUS.md`](../../README_CURRENT_STATUS.md)で旧版と明示。C#版成果物として配布しない。 |
 
 ### M-Phase 0完了判定
 
