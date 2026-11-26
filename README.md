@@ -5,7 +5,7 @@
 - 仕様: [C_SHARP_MIGRATION_SPEC.md](docs/C_SHARP_MIGRATION_SPEC.md)
 - M-Phase 0 調査報告: [MIGRATION_M0_ASSESSMENT.md](docs/MIGRATION_M0_ASSESSMENT.md)
 
-M-Phase 1～8の実装と検証用配布候補の作成を完了しました。M5/M6/M7のローカル検証では、Edge CDPによる本文取得と、取得プロセスの正常・強制終了後もブラウザが合成API要求を継続することを確認しました。実ゲーム、実74EN、HTTPS、ウィンドウ取り込み、長時間動作は未確認です。正式公開前に[MIGRATION_M8_REPORT.md](MIGRATION_M8_REPORT.md)の残項目とライセンス方針を確認してください。
+M-Phase 1～9を実装しました。M5/M6/M7/M9のローカル検証では、Edge CDPによるトップページ/別オリジンiframeからの本文取得と、取得プロセスの正常・強制終了後もブラウザが合成API要求を継続することを確認しました。実ゲーム、実74EN、HTTPS、ウィンドウ取り込み、長時間動作は未確認です。正式公開前に[MIGRATION_M8_REPORT.md](MIGRATION_M8_REPORT.md)と[MIGRATION_M9_REPORT.md](MIGRATION_M9_REPORT.md)の残項目、ライセンス方針を確認してください。
 
 ## SDK
 
@@ -33,4 +33,6 @@ CDP取得元の統合範囲とテスト結果は[MIGRATION_M6_REPORT.md](MIGRATI
 検証用ZIPの使い方は[README_USER.md](README_USER.md)を参照してください。自己完結型Release候補は[artifacts](artifacts/)にあります。
 
 M8配布候補の構成確認と制約は[MIGRATION_M8_REPORT.md](MIGRATION_M8_REPORT.md)を参照してください。
+
+iframe通信の監視修正と合成試験結果は[MIGRATION_M9_REPORT.md](MIGRATION_M9_REPORT.md)を参照してください。
 

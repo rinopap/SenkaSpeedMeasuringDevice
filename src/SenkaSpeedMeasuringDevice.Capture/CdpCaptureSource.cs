@@ -14,7 +14,7 @@ public sealed class CdpCaptureSource : ICaptureSource
     private const string TargetListPath = "json/list";
     private const int MaximumBufferedBytes = 8 * 1024 * 1024;
     private static readonly HashSet<string> AllowedCommands = [
-        "Network.enable", "Network.disable", "Network.getResponseBody"];
+        "Network.enable", "Network.disable", "Network.getResponseBody", "Target.setAutoAttach"];
 
     private readonly CdpCaptureOptions _options;
     private readonly ConcurrentDictionary<string, byte> _observedIds = new(StringComparer.Ordinal);
@@ -78,6 +78,17 @@ public sealed class CdpCaptureSource : ICaptureSource
                     maxTotalBufferSize = MaximumBufferedBytes,
                     maxResourceBufferSize = MaximumBufferedBytes
                 }, cancellationToken).ConfigureAwait(false);
+                await connection.SendAsync("Target.setAutoAttach", new
+                {
+                    autoAttach = true,
+                    waitForDebuggerOnStart = false,
+                    flatten = true,
+                    filter = new object[]
+                    {
+                        new { type = "iframe", exclude = false },
+                        new { exclude = true }
+                    }
+                }, cancellationToken).ConfigureAwait(false);
                 SetStatus("CDP接続中");
                 await ObserveEventsAsync(connection, cancellationToken).ConfigureAwait(false);
             }
@@ -125,14 +136,45 @@ public sealed class CdpCaptureSource : ICaptureSource
 
     private async Task ObserveEventsAsync(CdpConnection connection, CancellationToken cancellationToken)
     {
-        var pending = new Dictionary<string, Uri>(StringComparer.Ordinal);
+        var pending = new Dictionary<(string SessionId, string RequestId), Uri>();
         await foreach (var message in connection.Events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             if (!message.TryGetProperty("method", out var methodElement) ||
                 !message.TryGetProperty("params", out var parameters)) continue;
             var method = methodElement.GetString();
+            var sessionId = message.TryGetProperty("sessionId", out var sessionElement)
+                ? sessionElement.GetString() ?? string.Empty
+                : string.Empty;
+
+            if (method == "Target.attachedToTarget" &&
+                parameters.TryGetProperty("sessionId", out var childSessionElement) &&
+                childSessionElement.GetString() is { Length: > 0 } childSessionId &&
+                parameters.TryGetProperty("targetInfo", out var targetInfo) &&
+                targetInfo.TryGetProperty("type", out var type) && type.GetString() == "iframe")
+            {
+                await connection.SendAsync("Network.enable", new
+                {
+                    maxTotalBufferSize = MaximumBufferedBytes,
+                    maxResourceBufferSize = MaximumBufferedBytes
+                }, cancellationToken, childSessionId).ConfigureAwait(false);
+                await connection.SendAsync("Target.setAutoAttach", new
+                {
+                    autoAttach = true,
+                    waitForDebuggerOnStart = false,
+                    flatten = true,
+                    filter = new object[]
+                    {
+                        new { type = "iframe", exclude = false },
+                        new { exclude = true }
+                    }
+                }, cancellationToken, childSessionId).ConfigureAwait(false);
+                continue;
+            }
+            if (method == "Target.detachedFromTarget") continue;
+
             var requestId = parameters.TryGetProperty("requestId", out var idElement) ? idElement.GetString() : null;
             if (requestId is null) continue;
+            var requestKey = (sessionId, requestId);
 
             if (method == "Network.responseReceived" && parameters.TryGetProperty("response", out var response))
             {
@@ -141,17 +183,18 @@ public sealed class CdpCaptureSource : ICaptureSource
                 var status = response.TryGetProperty("status", out var statusElement) ? statusElement.GetDouble() : 0;
                 if (IsTargetApi(url) && status is >= 200 and < 300)
                 {
-                    pending[requestId] = url;
+                    pending[requestKey] = url;
                     if (pending.Count > 256) pending.Remove(pending.Keys.First());
                 }
             }
             else if (method == "Network.loadingFailed")
             {
-                pending.Remove(requestId);
+                pending.Remove(requestKey);
             }
-            else if (method == "Network.loadingFinished" && pending.Remove(requestId, out _))
+            else if (method == "Network.loadingFinished" && pending.Remove(requestKey, out _))
             {
-                var result = await connection.SendAsync("Network.getResponseBody", new { requestId }, cancellationToken)
+                var result = await connection.SendAsync("Network.getResponseBody", new { requestId }, cancellationToken,
+                        string.IsNullOrEmpty(sessionId) ? null : sessionId)
                     .ConfigureAwait(false);
                 if (!result.TryGetProperty("body", out var bodyElement) || !result.TryGetProperty("base64Encoded", out var base64Element))
                     continue;
@@ -214,13 +257,16 @@ public sealed class CdpCaptureSource : ICaptureSource
             _reader = ReadLoopAsync(_readerStop.Token);
         }
 
-        public async Task<JsonElement> SendAsync(string method, object parameters, CancellationToken token)
+        public async Task<JsonElement> SendAsync(string method, object parameters, CancellationToken token,
+            string? sessionId = null)
         {
             if (!AllowedCommands.Contains(method)) throw new InvalidOperationException($"Blocked CDP command: {method}");
             var id = Interlocked.Increment(ref _nextId);
             var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = completion;
-            var payload = JsonSerializer.SerializeToUtf8Bytes(new { id, method, @params = parameters });
+            var payload = sessionId is null
+                ? JsonSerializer.SerializeToUtf8Bytes(new { id, method, @params = parameters })
+                : JsonSerializer.SerializeToUtf8Bytes(new { id, method, @params = parameters, sessionId });
             await _socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, token).ConfigureAwait(false);
             return await completion.Task.WaitAsync(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
         }

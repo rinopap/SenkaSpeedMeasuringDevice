@@ -11,17 +11,18 @@ internal static class Program
     private static async Task Main(string[] args)
     {
         var port = int.Parse(args[0]);
+        var fetchDelaySeconds = args.Length > 1 ? Math.Clamp(int.Parse(args[1]), 1, 300) : 10;
         var listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
         Console.WriteLine($"127.0.0.1:{port}");
         while (true)
         {
             var client = await listener.AcceptTcpClientAsync();
-            _ = HandleAsync(client);
+            _ = HandleAsync(client, fetchDelaySeconds, port);
         }
     }
 
-    private static async Task HandleAsync(TcpClient client)
+    private static async Task HandleAsync(TcpClient client, int fetchDelaySeconds, int port)
     {
         using (client)
         {
@@ -33,7 +34,9 @@ internal static class Program
             var path = requestLine.Split(' ').ElementAtOrDefault(1) ?? "/";
             var (body, contentType) = path switch
             {
-                "/" => ("<!doctype html><meta charset=\"utf-8\"><script>setTimeout(()=>fetch('/kcsapi/api_port/port').then(r=>r.json()).then(x=>document.title='done'),10000)</script>", "text/html; charset=utf-8"),
+                "/" => ($"<!doctype html><meta charset=\"utf-8\"><script>setTimeout(()=>fetch('/kcsapi/api_port/port').then(r=>r.json()).then(x=>document.title='done'),{fetchDelaySeconds * 1000})</script>", "text/html; charset=utf-8"),
+                "/iframe" => ($"<!doctype html><meta charset=\"utf-8\"><iframe src=\"http://localhost:{port}/frame\"></iframe>", "text/html; charset=utf-8"),
+                "/frame" => ($"<!doctype html><meta charset=\"utf-8\"><script>setTimeout(()=>fetch('/kcsapi/api_port/port').then(r=>r.json()).then(x=>document.title='done'),{fetchDelaySeconds * 1000})</script>", "text/html; charset=utf-8"),
                 "/kcsapi/api_port/port" => (ApiBody, "application/json; charset=utf-8"),
                 _ => ("", "text/plain")
             };
