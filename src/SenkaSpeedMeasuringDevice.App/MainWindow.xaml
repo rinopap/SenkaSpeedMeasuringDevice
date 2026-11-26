@@ -1,0 +1,22 @@
+<Window x:Class="SenkaSpeedMeasuringDevice.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="戦果時速計測機" Height="190" Width="380"
+        MinHeight="160" MinWidth="340" WindowStartupLocation="CenterScreen">
+    <Grid Margin="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TabControl Grid.Row="0">
+            <TabItem Header="戦果時速">
+                <TextBlock Margin="8" FontWeight="Bold" Text="データなし" />
+            </TabItem>
+            <TabItem Header="艦娘Exp時速">
+                <TextBlock Margin="8" FontWeight="Bold" Text="データなし" />
+            </TabItem>
+        </TabControl>
+        <Button Grid.Row="1" Content="⚙ 設定" Width="84" Margin="0,6,0,0"
+                HorizontalAlignment="Right" IsEnabled="False" />
+    </Grid>
+</Window>

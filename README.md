@@ -1,97 +1,19 @@
-# 戦果時速計測機
+# SenkaSpeedMeasuringDevice C#移行版
 
-艦隊これくしょんの提督経験値を自動で取得し、**戦果時速をリアルタイムで表示**するWindowsデスクトップツールです。
+このフォルダは.NET 10 / WPFを使う新しい実装です。C++/Qt版は削除せず、`../SenkaSpeedMeasuringDeviceCpp`に保全しています。
 
----
+- 仕様: [C_SHARP_MIGRATION_SPEC.md](docs/C_SHARP_MIGRATION_SPEC.md)
+- M-Phase 0 調査報告: [MIGRATION_M0_ASSESSMENT.md](docs/MIGRATION_M0_ASSESSMENT.md)
 
-## スクリーンショット
+M-Phase 1を完了しました。WPFの基本ウィンドウ、Coreの共通型/`ICaptureSource`、Captureモジュール、xUnitプロジェクトを作成し、ビルドと初回テストを確認しています。通信取得、計算、CSV保存、設定、タスクトレイはまだ実装されていません。
 
-> *(起動するとこのような画面が表示されます)*
->
-> ```
-> ・00:00~01:00 戦果時速 45.23
-> ・01:00~02:00 戦果時速 48.10
-> ・02:00~02:34 戦果時速 51.67
->                        ⚙ 設定
-> ```
+## SDK
 
----
+開発時点のLTS候補として.NET 10を使います。Windows 10の対応下限は配布対象を確定する前に確認します。
 
-## 機能
-
-- 直近3時間帯の**戦果時速をリアルタイム表示**
-- ×ボタンで閉じても**タスクトレイに常駐**し続ける
-- **ダークモード対応**（背景 `#202124`）
-- フォント・フォントサイズの変更
-- 常に最前面表示のON/OFF（74enへの取り込み時はOFFを推奨）
-- Windowsログオン時の自動起動設定
-
----
-
-## 動作環境
-
-- Windows 10 / 11
-- 試製七四式電子観測儀 (ElectronicObserber74EN) が導入済みであること
-
----
-
-## 導入方法
-
-1. [Releases](../../releases) から最新の `SenkaSpeedMeasuringDevice_vX.X.X.zip` をダウンロード
-2. 任意のフォルダに展開
-3. `戦果時速計測機.exe` を起動
-4. 初回起動時に表示されるガイドに従って74enの通信保存先を設定
-
-### 74en側の設定
-
-74enで以下の設定を行ってください。
-
-```
-ファイル → 設定 → 通信 タブ
-  ☑ 通信内容を保存する
-  ☑ response
-  保存先フォルダ：（展開先フォルダ）\74en_responses
+```powershell
+dotnet build SenkaSpeedMeasuringDevice.sln
+dotnet test SenkaSpeedMeasuringDevice.sln
 ```
 
----
-
-## 74enへのウィンドウ取り込みについて
-
-74enの「任意のウィンドウを取り込む」機能を使う場合は、  
-**設定 → 常に最前面に表示 → OFFにして「適用」** してから取り込み操作を行ってください。
-
-`-topmost` フラグがONのままだとウィンドウが消える不具合が発生します。
-
----
-
-## 自動生成されるファイル
-
-| ファイル名 | 内容 |
-|---|---|
-| `74en_responses/` | 74enが出力するJSONの保存先 |
-| `exp_log.csv` | 経験値の記録 |
-| `ui_config.json` | 外観・起動設定の保存 |
-| `first_setup_done.flag` | 初回案内の表示済みフラグ |
-| `last_cleanup.flag` | 古いJSON削除タイミングの管理 |
-
-これらは起動時に自動生成されます。事前準備は不要です。
-
----
-
-## 必要ライブラリ（ソースから実行する場合）
-
-```
-pip install watchdog pystray pillow
-```
-
-実行：
-
-```
-python senka_main.py
-```
-
----
-
-## ライセンス
-
-MIT License
+ビルド結果と現段階の制約は[MIGRATION_M1_REPORT.md](MIGRATION_M1_REPORT.md)を参照してください。
