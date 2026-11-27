@@ -28,6 +28,8 @@
 - `tests/SenkaSpeedMeasuringDevice.Tests/CdpCaptureSyntheticTests.cs`（新規）
 - `MIGRATION_M12_REPORT.md`（本報告書）
 
+GitHubの`develop-csharp`へM12をfast-forwardで反映した。コミット: [`54787cb187fd63f128be50a99bd8e9b90239364d`](https://github.com/rinopap/SenkaSpeedMeasuringDevice/commit/54787cb187fd63f128be50a99bd8e9b90239364d)。`main`、Release、配布ZIPは変更していない。
+
 ## 3. 再利用した既存実装
 
 - M11の固定ゲームページ、所属サーバー台帳、APIホスト・パス・HTTPS判定。
@@ -137,5 +139,5 @@ M12更新版を利用できる状態になった後、通常の対応ブラウ�
 - M12ではブラウザ起動方式、利用可能ブラウザ範囲、許可URL形状、ポート所有者の安全性を確定していない。
 - M15では取得欠損統計・長時間安定性・キュー満杯時の運用表示を追加検討する。
 
-本作業ではM13以降の実装、配布ZIP作成、正式リリース、Git履歴操作は行っていない。
+本作業ではM13以降の実装、配布ZIP作成、正式リリース、Git履歴の書き換えは行っていない。
 
