@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -10,13 +11,14 @@ namespace SenkaSpeedMeasuringDevice.Capture;
 /// <summary>Observes one explicitly selected loopback-CDP page target; it never controls page content.</summary>
 public sealed class CdpCaptureSource : ICaptureSource
 {
-    private const string ApiPath = "/kcsapi/api_port/port";
+    private const string ApiPath = KancolleCapturePolicy.ApiPath;
     private const string TargetListPath = "json/list";
     private const int MaximumBufferedBytes = 8 * 1024 * 1024;
     private static readonly HashSet<string> AllowedCommands = [
         "Network.enable", "Network.disable", "Network.getResponseBody", "Target.setAutoAttach"];
 
     private readonly CdpCaptureOptions _options;
+    private readonly GameServer _server;
     private readonly ConcurrentDictionary<string, byte> _observedIds = new(StringComparer.Ordinal);
     private CancellationTokenSource? _stopSource;
     private Task? _worker;
@@ -25,6 +27,9 @@ public sealed class CdpCaptureSource : ICaptureSource
     {
         _options = options;
         options.Validate();
+        _server = GameServerRegistry.TryGet(options.ServerId, out var server)
+            ? server
+            : throw new ArgumentOutOfRangeException(nameof(options), "所属サーバーを選択してください。");
     }
 
     public string Name => CaptureModule.CdpSourceName;
@@ -64,7 +69,12 @@ public sealed class CdpCaptureSource : ICaptureSource
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        using var http = new HttpClient(new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            UseProxy = false,
+            ConnectTimeout = TimeSpan.FromSeconds(3)
+        }) { Timeout = TimeSpan.FromSeconds(3) };
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -113,15 +123,18 @@ public sealed class CdpCaptureSource : ICaptureSource
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-        var wanted = new Uri(_options.PageUrl).AbsoluteUri;
         var matches = new List<PageTarget>();
         foreach (var item in document.RootElement.EnumerateArray())
         {
             if (!item.TryGetProperty("type", out var type) || type.GetString() != "page" ||
-                !item.TryGetProperty("url", out var url) || !string.Equals(url.GetString(), wanted, StringComparison.Ordinal) ||
+                !item.TryGetProperty("url", out var url) ||
+                !Uri.TryCreate(url.GetString(), UriKind.Absolute, out var pageUri) ||
+                !KancolleCapturePolicy.IsAllowedGamePage(pageUri) ||
                 !item.TryGetProperty("webSocketDebuggerUrl", out var webSocketUrl)) continue;
             var uri = new Uri(webSocketUrl.GetString()!);
-            if (uri.Scheme != "ws" || !uri.IsLoopback)
+            if (uri.Scheme != "ws" || !uri.IsLoopback || uri.Port != _options.DebugPort ||
+                !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) ||
+                !string.IsNullOrEmpty(uri.Fragment))
                 throw new InvalidOperationException("CDP WebSocketはloopbackに限定してください。");
             matches.Add(new PageTarget(uri));
         }
@@ -181,7 +194,7 @@ public sealed class CdpCaptureSource : ICaptureSource
                 var urlText = response.TryGetProperty("url", out var urlElement) ? urlElement.GetString() : null;
                 if (!Uri.TryCreate(urlText, UriKind.Absolute, out var url)) continue;
                 var status = response.TryGetProperty("status", out var statusElement) ? statusElement.GetDouble() : 0;
-                if (IsTargetApi(url) && status is >= 200 and < 300)
+                if (KancolleCapturePolicy.IsAllowedApi(url, _server) && status is >= 200 and < 300)
                 {
                     pending[requestKey] = url;
                     if (pending.Count > 256) pending.Remove(pending.Keys.First());
@@ -211,10 +224,6 @@ public sealed class CdpCaptureSource : ICaptureSource
         }
     }
 
-    private bool IsTargetApi(Uri url) =>
-        (url.Scheme is "http" or "https") && url.AbsolutePath == ApiPath &&
-        _options.ApiHosts.Contains(url.Host, StringComparer.OrdinalIgnoreCase);
-
     private void Publish(ApiResponse response)
     {
         if (ResponseReceived is not { } handlers) return;
@@ -239,7 +248,7 @@ public sealed class CdpCaptureSource : ICaptureSource
 
     private sealed class CdpConnection : IAsyncDisposable
     {
-        private readonly ClientWebSocket _socket = new();
+        private readonly ClientWebSocket _socket = CreateSocket();
         private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pending = new();
         private readonly System.Threading.Channels.Channel<JsonElement> _events =
             System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
@@ -250,6 +259,13 @@ public sealed class CdpCaptureSource : ICaptureSource
 
         public CdpConnection(Uri endpoint) => _endpoint = endpoint;
         public System.Threading.Channels.ChannelReader<JsonElement> Events => _events.Reader;
+
+        private static ClientWebSocket CreateSocket()
+        {
+            var socket = new ClientWebSocket();
+            socket.Options.Proxy = DirectOnlyProxy.Instance;
+            return socket;
+        }
 
         public async Task ConnectAsync(CancellationToken token)
         {
@@ -327,6 +343,13 @@ public sealed class CdpCaptureSource : ICaptureSource
             _socket.Dispose();
             _readerStop.Dispose();
         }
+
+        private sealed class DirectOnlyProxy : IWebProxy
+        {
+            public static DirectOnlyProxy Instance { get; } = new();
+            public ICredentials? Credentials { get; set; }
+            public Uri GetProxy(Uri destination) => destination;
+            public bool IsBypassed(Uri host) => true;
+        }
     }
 }
-

@@ -25,15 +25,18 @@ CDPを使うにはブラウザ起動時の明示設定が必要です。通常�
 dotnet run --project tools/LocalCdpTestServer/LocalCdpTestServer.csproj -- 50880
 ```
 
-## 製品CDP取得元のloopback結合プローブ
+第2引数にページからAPIリクエストを送るまでの秒数を指定できます（1～300秒、省略時10秒）。強制終了試験では、CDP取得元を接続後に止めてもブラウザが後続のローカルリクエストを継続できることを確認できます。
 
-`CdpCaptureIntegrationProbe`は製品の`CdpCaptureSource`を使い、loopback Edgeで合成レスポンス本文のハッシュ一致を確認します。Edgeには専用の一時プロファイルと`--remote-debugging-address=127.0.0.1`を使い、実ブラウザの既存プロファイルや74ENの設定は変更しません。
+## 製品CDP取得元の接続プローブ
+
+`CdpCaptureIntegrationProbe`は製品の`CdpCaptureSource`を使い、固定の艦これページと選択サーバーの対象APIを観測できるか確認します。任意URL/APIホストを受け付けないため、M10までのloopback合成サーバー試験をこのプローブで再現するものではありません。実ゲームで実行する場合は既に利用者が起動したブラウザに接続するだけで、計測機からゲームAPIを送信しません。
 
 ```powershell
 dotnet build SenkaSpeedMeasuringDevice.sln -c Release
 dotnet run --project tools/CdpCaptureIntegrationProbe/CdpCaptureIntegrationProbe.csproj -- `
-  9222 'http://127.0.0.1:50880/' 127.0.0.1
+  9222 20
 ```
 
+第2引数はサーバーID（1～20）です。この補助プローブは正式配布物に含めません。
 
 

@@ -3,9 +3,10 @@
 このフォルダは.NET 10 / WPFを使う新しい実装です。C++/Qt版のソースと検証資料は[develop-cppブランチ](https://github.com/rinopap/SenkaSpeedMeasuringDevice/tree/develop-cpp/cpp)にスナップショットとして保全しています。
 
 - 仕様: [C_SHARP_MIGRATION_SPEC.md](docs/C_SHARP_MIGRATION_SPEC.md)
+- 次期統合仕様（M11以降の優先仕様）: [NEXT_DEVELOPMENT_SPEC.md](docs/NEXT_DEVELOPMENT_SPEC.md)
 - M-Phase 0 調査報告: [MIGRATION_M0_ASSESSMENT.md](docs/MIGRATION_M0_ASSESSMENT.md)
 
-M-Phase 1～10を実装しました。M5/M6/M7/M9のローカル検証では、Edge CDPによるトップページ/別オリジンiframeからの本文取得と、取得プロセスの正常・強制終了後もブラウザが合成API要求を継続することを確認しました。実ゲーム、実74EN、HTTPS、ウィンドウ取り込み、長時間動作は未確認です。正式公開前に[MIGRATION_M8_REPORT.md](MIGRATION_M8_REPORT.md)と[MIGRATION_M9_REPORT.md](MIGRATION_M9_REPORT.md)の残項目、ライセンス方針を確認してください。
+M-Phase 1～10は実装済み、M-Phase 11（艦これ専用化）の実装・自動試験は完了しています。M11後の実ブラウザURL形式と設定画面は未確認です。[MIGRATION_M11_REPORT.md](MIGRATION_M11_REPORT.md)に変更と制約を記録しています。正式公開前に残項目とライセンス方針を確認してください。
 
 ## SDK
 
@@ -37,4 +38,3 @@ M8配布候補の構成確認と制約は[MIGRATION_M8_REPORT.md](MIGRATION_M8_R
 iframe通信の監視修正と合成試験結果は[MIGRATION_M9_REPORT.md](MIGRATION_M9_REPORT.md)を参照してください。
 
 タブ列UIと通常ブラウザ起動の操作改善案は[MIGRATION_M10_REPORT.md](MIGRATION_M10_REPORT.md)を参照してください。
-

@@ -19,17 +19,14 @@
         <Separator Margin="0,14,0,10" />
         <TextBlock Text="データ取得" FontWeight="Bold" Margin="0,0,0,6" />
         <CheckBox x:Name="CdpEnabledCheck" Content="CDPで通常ブラウザを監視する" Margin="0,3" />
-        <TextBlock Text="CDPは専用ブラウザのloopback設定が必要です。本アプリはブラウザ設定を変更しません。" TextWrapping="Wrap" FontSize="11" Margin="0,2,0,6" />
-        <TextBlock Text="CDPポート" />
+        <TextBlock Text="対象ページとAPIは艦これ用に固定されます。" TextWrapping="Wrap" FontSize="11" Margin="0,2,0,6" />
+        <TextBlock Text="所属サーバー" Margin="0,4,0,3" />
+        <ComboBox x:Name="GameServerBox" MinWidth="300" DisplayMemberPath="Name" SelectedValuePath="Id" />
+        <TextBlock Text="CDPポート（詳細設定）" Margin="0,8,0,3" />
         <TextBox x:Name="CdpPortBox" Text="9222" />
-        <TextBlock Text="対象ページの完全なURL" Margin="0,6,0,0" />
-        <TextBox x:Name="CdpPageUrlBox" />
-        <TextBlock Text="APIホスト (複数はカンマ区切り)" Margin="0,6,0,0" />
-        <TextBox x:Name="CdpApiHostsBox" />
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
             <Button Content="適用" Width="84" IsDefault="True" Click="Apply_Click" />
             <Button Content="閉じる" Width="84" Margin="8,0,0,0" IsCancel="True" />
         </StackPanel>
     </StackPanel>
 </Window>
-

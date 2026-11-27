@@ -5,28 +5,18 @@ namespace SenkaSpeedMeasuringDevice.Tests;
 public sealed class CdpCaptureOptionsTests
 {
     [Fact]
-    public void AcceptsAnExplicitPageAndApiHost()
+    public void AcceptsKnownServerAndLoopbackPort()
     {
-        var options = new CdpCaptureOptions(9222, "https://game.example.test/start",
-            new HashSet<string>(["api.example.test"]));
-        options.Validate();
+        new CdpCaptureOptions(9222, 20).Validate();
     }
 
     [Theory]
-    [InlineData(0, "http://game.example.test/", "api.example.test")]
-    [InlineData(9222, "file:///tmp/game.html", "api.example.test")]
-    [InlineData(9222, "https://user:secret@game.example.test/", "api.example.test")]
-    public void RejectsInvalidTargetConfiguration(int port, string pageUrl, string apiHost)
+    [InlineData(0, 1)]
+    [InlineData(65536, 1)]
+    [InlineData(9222, 0)]
+    [InlineData(9222, 21)]
+    public void RejectsInvalidPortOrServer(int port, int serverId)
     {
-        var options = new CdpCaptureOptions(port, pageUrl, new HashSet<string>([apiHost]));
-        Assert.ThrowsAny<ArgumentException>(options.Validate);
-    }
-
-    [Fact]
-    public void RejectsMissingApiHostAllowlist()
-    {
-        var options = new CdpCaptureOptions(9222, "https://game.example.test/", new HashSet<string>());
-        Assert.ThrowsAny<ArgumentException>(options.Validate);
+        Assert.ThrowsAny<ArgumentException>(() => new CdpCaptureOptions(port, serverId).Validate());
     }
 }
-

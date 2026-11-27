@@ -91,9 +91,9 @@ public partial class MainWindow : Window
     private ICaptureSource CreateCaptureSource(AppSettings settings)
     {
         if (!settings.CdpEnabled) return new FileCaptureSource(Path.Combine(_appDirectory, "74en_responses"));
-        var hosts = settings.CdpApiHosts.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        var options = new CdpCaptureOptions(settings.CdpDebugPort, settings.CdpPageUrl,
-            new HashSet<string>(hosts, StringComparer.OrdinalIgnoreCase));
+        if (settings.ServerId is not { } serverId)
+            throw new ArgumentException("所属サーバーを選択してください。");
+        var options = new CdpCaptureOptions(settings.CdpDebugPort, serverId);
         return new CdpCaptureSource(options);
     }
 
@@ -257,4 +257,3 @@ public partial class MainWindow : Window
         System.Windows.Application.Current.Shutdown();
     }
 }
-

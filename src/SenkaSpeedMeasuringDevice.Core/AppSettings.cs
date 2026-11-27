@@ -11,8 +11,7 @@ public sealed record AppSettings
     [JsonPropertyName("always_on_top")] public bool AlwaysOnTop { get; init; } = true;
     [JsonPropertyName("cdp_enabled")] public bool CdpEnabled { get; init; }
     [JsonPropertyName("cdp_debug_port")] public int CdpDebugPort { get; init; } = 9222;
-    [JsonPropertyName("cdp_page_url")] public string CdpPageUrl { get; init; } = string.Empty;
-    [JsonPropertyName("cdp_api_hosts")] public string CdpApiHosts { get; init; } = string.Empty;
+    [JsonPropertyName("server_id")] public int? ServerId { get; init; }
 
     public static AppSettings Load(string path)
     {
@@ -25,8 +24,7 @@ public sealed record AppSettings
                 FontFamily = string.IsNullOrWhiteSpace(loaded.FontFamily) ? "Yu Gothic" : loaded.FontFamily,
                 FontSize = Math.Clamp(loaded.FontSize, 8, 24),
                 CdpDebugPort = loaded.CdpDebugPort is >= 1 and <= 65535 ? loaded.CdpDebugPort : 9222,
-                CdpPageUrl = loaded.CdpPageUrl ?? string.Empty,
-                CdpApiHosts = loaded.CdpApiHosts ?? string.Empty
+                ServerId = loaded.ServerId is { } serverId && GameServerRegistry.TryGet(serverId, out _) ? serverId : null
             };
         }
         catch (JsonException) { return new AppSettings(); }
@@ -40,4 +38,3 @@ public sealed record AppSettings
         File.WriteAllText(fullPath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
     }
 }
-

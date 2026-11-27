@@ -12,6 +12,8 @@ public partial class SettingsWindow : Window
     {
         InitializeComponent();
         FontFamilyBox.ItemsSource = new[] { "Yu Gothic", "メイリオ", "MS Gothic", "Arial", "Courier New" };
+        GameServerBox.ItemsSource = GameServerRegistry.All;
+        GameServerBox.SelectedValue = settings.ServerId;
         FontFamilyBox.SelectedItem = FontFamilyBox.Items.Contains(settings.FontFamily) ? settings.FontFamily : "Yu Gothic";
         DarkModeCheck.IsChecked = settings.DarkMode;
         FontSizeSlider.Value = Math.Clamp(settings.FontSize, 8, 24);
@@ -19,8 +21,6 @@ public partial class SettingsWindow : Window
         AutoStartCheck.IsChecked = autoStart;
         CdpEnabledCheck.IsChecked = settings.CdpEnabled;
         CdpPortBox.Text = settings.CdpDebugPort.ToString();
-        CdpPageUrlBox.Text = settings.CdpPageUrl;
-        CdpApiHostsBox.Text = settings.CdpApiHosts;
         FontSizeValue.Text = ((int)FontSizeSlider.Value).ToString();
         FontSizeSlider.ValueChanged += (_, _) => FontSizeValue.Text = ((int)FontSizeSlider.Value).ToString();
     }
@@ -34,15 +34,16 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        var apiHosts = CdpApiHostsBox.Text.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        var cdpPageUrl = CdpPageUrlBox.Text.Trim();
+        int? serverId = GameServerBox.SelectedValue is int selectedServerId ? selectedServerId : null;
         if (CdpEnabledCheck.IsChecked == true)
         {
-            try
+            if (serverId is null)
             {
-                new CdpCaptureOptions(cdpPort, cdpPageUrl,
-                    new HashSet<string>(apiHosts, StringComparer.OrdinalIgnoreCase)).Validate();
+                System.Windows.MessageBox.Show(this, "所属サーバーを選択してください。", "設定",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
             }
+            try { new CdpCaptureOptions(cdpPort, serverId.Value).Validate(); }
             catch (ArgumentException ex)
             {
                 System.Windows.MessageBox.Show(this, ex.Message, "CDP設定", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -58,11 +59,9 @@ public partial class SettingsWindow : Window
             AlwaysOnTop = AlwaysOnTopCheck.IsChecked == true,
             CdpEnabled = CdpEnabledCheck.IsChecked == true,
             CdpDebugPort = cdpPort,
-            CdpPageUrl = cdpPageUrl,
-            CdpApiHosts = string.Join(',', apiHosts)
+            ServerId = serverId
         };
         SettingsApplied?.Invoke(settings, AutoStartCheck.IsChecked == true);
         DialogResult = true;
     }
 }
-
