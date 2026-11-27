@@ -28,4 +28,3 @@ public sealed class CdpEndpointPolicyTests
         Assert.False(CdpEndpointPolicy.IsAllowedWebSocket(new Uri("ws://127.0.0.1:9222/devtools/page/other"), 9222, "abc"));
     }
 }
-

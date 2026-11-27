@@ -9,4 +9,3 @@
     <ProjectReference Include="..\..\src\SenkaSpeedMeasuringDevice.Capture\SenkaSpeedMeasuringDevice.Capture.csproj" />
   </ItemGroup>
 </Project>
-

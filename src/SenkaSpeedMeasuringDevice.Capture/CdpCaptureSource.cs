@@ -14,7 +14,7 @@ public sealed class CdpCaptureSource : ICaptureSource
     private const string ApiPath = KancolleCapturePolicy.ApiPath;
     private const string TargetListPath = "json/list";
     private const int MaximumBufferedBytes = CdpCommandPolicy.MaximumBufferedBytes;
-    private const int MaximumCdpMessageBytes = 12 * 1024 * 1024;
+    private const int MaximumCdpMessageBytes = 2 * 1024 * 1024;
     private const int MaximumTargetListBytes = 256 * 1024;
 
     private readonly CdpCaptureOptions _options;
@@ -80,13 +80,16 @@ public sealed class CdpCaptureSource : ICaptureSource
             try
             {
                 SetStatus("CDP接続先を確認中");
+                if (_options.ExpectedProcessPath is { } expectedProcessPath &&
+                    !CdpListenerProcessPolicy.IsOwnedByProcessPath(_options.DebugPort, expectedProcessPath))
+                    throw new InvalidOperationException("CDP待受プロセスが選択ブラウザと一致しません。");
                 var target = await FindPageTargetAsync(http, cancellationToken).ConfigureAwait(false);
                 var policy = new CdpCommandPolicy();
-                await using var connection = new CdpConnection(target.WebSocketUrl, policy);
+                await using var connection = new CdpConnection(target.TargetId, target.WebSocketUrl, policy, _server);
                 await connection.ConnectAsync(cancellationToken).ConfigureAwait(false);
                 await connection.SendAsync("Page.enable", new { }, cancellationToken).ConfigureAwait(false);
                 var frameTree = await connection.SendAsync("Page.getFrameTree", new { }, cancellationToken).ConfigureAwait(false);
-                if (!TryGetRootFrame(frameTree, out var frameId, out var frameUrl, out var relatedFrames) ||
+        if (!TryGetRootFrame(frameTree, out var frameId, out var frameUrl, out var relatedFrames) ||
                     !KancolleCapturePolicy.IsAllowedGamePage(frameUrl))
                     throw new InvalidOperationException("CDPルートフレームが許可されたゲームページではありません。");
                 policy.SetTopFrame(frameId, frameUrl, relatedFrames);
@@ -106,7 +109,7 @@ public sealed class CdpCaptureSource : ICaptureSource
                         new { exclude = true }
                     }
                 }, cancellationToken).ConfigureAwait(false);
-                SetStatus("CDP接続中");
+                SetStatus("CDP接続中: 対象APIを待機中");
                 await ObserveEventsAsync(connection, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
@@ -149,7 +152,7 @@ public sealed class CdpCaptureSource : ICaptureSource
             var uri = new Uri(webSocketUrl.GetString()!);
             if (!CdpEndpointPolicy.IsAllowedWebSocket(uri, _options.DebugPort, targetId))
                 throw new InvalidOperationException("CDP WebSocketはloopbackに限定してください。");
-            matches.Add(new PageTarget(uri));
+            matches.Add(new PageTarget(targetId, uri));
         }
 
         return matches.Count switch
@@ -162,11 +165,13 @@ public sealed class CdpCaptureSource : ICaptureSource
 
     private static async Task<byte[]> ReadBoundedAsync(Stream stream, int maximumBytes, CancellationToken cancellationToken)
     {
+        using var bodyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bodyTimeout.CancelAfter(TimeSpan.FromSeconds(3));
         using var buffer = new MemoryStream();
         var chunk = new byte[16 * 1024];
         while (true)
         {
-            var read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false);
+            var read = await stream.ReadAsync(chunk, bodyTimeout.Token).ConfigureAwait(false);
             if (read == 0) return buffer.ToArray();
             if (buffer.Length + read > maximumBytes) throw new InvalidDataException("Local CDP response exceeded the safety limit.");
             await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
@@ -174,7 +179,7 @@ public sealed class CdpCaptureSource : ICaptureSource
     }
 
     private static bool TryGetRootFrame(JsonElement result, out string frameId, out Uri frameUrl,
-        out List<(string FrameId, string? ParentFrameId)> relatedFrames)
+        out List<(string FrameId, string? ParentFrameId, string? LoaderId)> relatedFrames)
     {
         frameId = string.Empty;
         frameUrl = new Uri("about:blank");
@@ -190,18 +195,19 @@ public sealed class CdpCaptureSource : ICaptureSource
     }
 
     private static void CollectFrameIds(JsonElement tree, string? parentFrameId,
-        List<(string FrameId, string? ParentFrameId)> frames)
+        List<(string FrameId, string? ParentFrameId, string? LoaderId)> frames)
     {
         if (!tree.TryGetProperty("frame", out var frame) || !frame.TryGetProperty("id", out var id) ||
             id.GetString() is not { Length: > 0 } frameId) return;
-        frames.Add((frameId, parentFrameId));
+        var loaderId = frame.TryGetProperty("loaderId", out var loader) && loader.ValueKind == JsonValueKind.String ? loader.GetString() : null;
+        frames.Add((frameId, parentFrameId, loaderId));
         if (!tree.TryGetProperty("childFrames", out var children) || children.ValueKind != JsonValueKind.Array) return;
         foreach (var child in children.EnumerateArray()) CollectFrameIds(child, frameId, frames);
     }
 
     private async Task ObserveEventsAsync(CdpConnection connection, CancellationToken cancellationToken)
     {
-        var pending = new Dictionary<(string SessionId, string RequestId), long>();
+        var pending = new Dictionary<(string SessionId, string RequestId), RequestPermit>();
         await foreach (var cdpEvent in connection.Events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             var message = cdpEvent.Message;
@@ -213,7 +219,7 @@ public sealed class CdpCaptureSource : ICaptureSource
                 : string.Empty;
 
             if (sessionId.Length == 0 && method is "Page.frameNavigated" or "Page.navigatedWithinDocument")
-                SetStatus(cdpEvent.PageAllowed ? "CDP接続中" : "CDP対象ページ外");
+                SetStatus(cdpEvent.PageAllowed ? "CDP接続中: 対象APIを待機中" : "CDP対象ページ外");
             if (cdpEvent.PageStateChanged)
             {
                 if (cdpEvent.PageAllowed)
@@ -249,7 +255,27 @@ public sealed class CdpCaptureSource : ICaptureSource
                 parameters.TryGetProperty("targetInfo", out var targetInfo) &&
                 targetInfo.TryGetProperty("type", out var type) && type.GetString() == "iframe")
             {
-                if (!connection.Policy.IsSessionActive(childSessionId)) continue;
+                var selectedGameFrame = parameters.TryGetProperty("selectedGameOopif", out var gameFrameElement) &&
+                                        gameFrameElement.ValueKind == JsonValueKind.True;
+                if (!connection.Policy.IsSessionActive(childSessionId))
+                {
+                    if (selectedGameFrame) SetStatus("CDP接続中: ゲームiframeを許可フレームと照合できません");
+                    continue;
+                }
+                await connection.SendAsync("Page.enable", new { }, cancellationToken, childSessionId).ConfigureAwait(false);
+                var childTree = await connection.SendAsync("Page.getFrameTree", new { }, cancellationToken, childSessionId).ConfigureAwait(false);
+                var childTreeValid = TryGetRootFrame(childTree, out var childFrameId, out var childFrameUrl, out var childFrames);
+                var childLoaderId = childFrames.FirstOrDefault().LoaderId;
+                var boundToPageTree = childTreeValid && connection.Policy.BindSessionFrame(childSessionId, childFrameId, childLoaderId);
+                var boundApprovedOopif = !boundToPageTree && selectedGameFrame && childTreeValid &&
+                    KancolleCapturePolicy.IsAllowedGameFrame(childFrameUrl, _server) &&
+                    connection.Policy.BindApprovedGameOopifFrame(childSessionId, childFrameId, childLoaderId);
+                if (!boundToPageTree && !boundApprovedOopif)
+                {
+                    connection.Policy.RejectSession(childSessionId);
+                    if (selectedGameFrame) SetStatus("CDP接続中: ゲームiframeが許可フレームツリーと一致しません");
+                    continue;
+                }
                 await connection.SendAsync("Network.enable", new
                 {
                     maxTotalBufferSize = MaximumBufferedBytes,
@@ -266,6 +292,8 @@ public sealed class CdpCaptureSource : ICaptureSource
                         new { exclude = true }
                     }
                 }, cancellationToken, childSessionId).ConfigureAwait(false);
+                if (selectedGameFrame)
+                    SetStatus("CDP接続中: ゲームiframeを監視中、対象APIを待機中");
                 continue;
             }
             if (method == "Target.detachedFromTarget") continue;
@@ -274,35 +302,78 @@ public sealed class CdpCaptureSource : ICaptureSource
             if (requestId is null) continue;
             var requestKey = (sessionId, requestId);
 
-            if (method == "Network.responseReceived" && parameters.TryGetProperty("response", out var response))
+            if (method == "Network.requestWillBeSent")
+            {
+                pending.Remove(requestKey);
+                connection.Policy.CompleteRequest(sessionId, requestId);
+                if (!parameters.TryGetProperty("request", out var request) ||
+                    !request.TryGetProperty("url", out var requestUrlElement)) continue;
+                if (!Uri.TryCreate(requestUrlElement.GetString(), UriKind.Absolute, out var requestUrl) ||
+                    !KancolleCapturePolicy.IsAllowedApi(requestUrl, _server))
+                {
+                    if (parameters.TryGetProperty("apiPathMatches", out var apiPathElement) &&
+                        apiPathElement.ValueKind == JsonValueKind.True)
+                        SetStatus("CDP接続中: 対象APIパスを検出しましたがホストまたはHTTPS条件が不一致");
+                    continue;
+                }
+                if (!parameters.TryGetProperty("frameId", out var frameElement) || frameElement.GetString() is not { Length: > 0 } frameId ||
+                    !parameters.TryGetProperty("loaderId", out var loaderElement) || loaderElement.ValueKind != JsonValueKind.String ||
+                    loaderElement.GetString() is not { } loaderId)
+                {
+                    SetStatus("CDP接続中: 対象API要求のフレーム情報が不足");
+                    continue;
+                }
+                if (connection.Policy.TryRegisterRequest(sessionId, requestId, frameId, loaderId, cdpEvent.Generation, out var generation))
+                {
+                    pending[requestKey] = new RequestPermit(generation, frameId, loaderId);
+                    SetStatus("CDP接続中: 対象API要求を検出");
+                    if (pending.Count > 256)
+                    {
+                        var oldest = pending.Keys.First();
+                        pending.Remove(oldest);
+                        connection.Policy.CompleteRequest(oldest.SessionId, oldest.RequestId);
+                    }
+                }
+                else SetStatus("CDP接続中: 対象API要求のフレーム照合に失敗");
+            }
+            else if (method == "Network.responseReceived" && parameters.TryGetProperty("response", out var response))
             {
                 var urlText = response.TryGetProperty("url", out var urlElement) ? urlElement.GetString() : null;
-                if (!Uri.TryCreate(urlText, UriKind.Absolute, out var url)) continue;
-                var status = response.TryGetProperty("status", out var statusElement) ? statusElement.GetDouble() : 0;
-                if (KancolleCapturePolicy.IsAllowedApi(url, _server) && status is >= 200 and < 300)
+                var status = response.TryGetProperty("status", out var statusElement) && statusElement.TryGetDouble(out var parsedStatus) ? parsedStatus : 0;
+                var responseFrame = parameters.TryGetProperty("frameId", out var responseFrameElement) ? responseFrameElement.GetString() : null;
+                var responseLoader = parameters.TryGetProperty("loaderId", out var responseLoaderElement) ? responseLoaderElement.GetString() : null;
+                var isSelectedApi = Uri.TryCreate(urlText, UriKind.Absolute, out var url) && KancolleCapturePolicy.IsAllowedApi(url, _server);
+                if (!pending.TryGetValue(requestKey, out var matchedPermit))
                 {
-                    if (connection.Policy.TryRegisterRequest(sessionId, requestId, cdpEvent.Generation, out var generation))
-                    {
-                        pending[requestKey] = generation;
-                        if (pending.Count > 256)
-                        {
-                            var oldest = pending.Keys.First();
-                            pending.Remove(oldest);
-                            connection.Policy.CompleteRequest(oldest.SessionId, oldest.RequestId);
-                        }
-                    }
+                    if (isSelectedApi) SetStatus("CDP接続中: 対象API応答を検出しましたが要求を照合できません");
+                }
+                else if (!isSelectedApi || status is < 200 or >= 300 || status % 1 != 0 ||
+                         responseFrame != matchedPermit.FrameId || responseLoader != matchedPermit.LoaderId)
+                {
+                    pending.Remove(requestKey);
+                    connection.Policy.CompleteRequest(sessionId, requestId);
+                    if (isSelectedApi) SetStatus("CDP接続中: 対象API応答の状態またはフレーム照合に失敗");
+                }
+                else
+                {
+                    pending[requestKey] = matchedPermit with { ResponseValidated = true };
+                    SetStatus($"CDP接続中: 対象API応答{(int)status}を照合済み");
                 }
             }
             else if (method == "Network.loadingFailed")
             {
+                var hadPending = pending.ContainsKey(requestKey);
                 pending.Remove(requestKey);
                 connection.Policy.CompleteRequest(sessionId, requestId);
+                if (hadPending) SetStatus("CDP接続中: 対象API通信が完了しませんでした");
             }
-            else if (method == "Network.loadingFinished" && pending.Remove(requestKey, out var generation))
+            else if (method == "Network.loadingFinished" && pending.Remove(requestKey, out var finishedPermit) && finishedPermit.ResponseValidated)
             {
+                var generation = finishedPermit.Generation;
                 if (!connection.Policy.IsCurrent(sessionId, requestId, generation)) continue;
                 try
                 {
+                    SetStatus("CDP接続中: 対象API本文を取得中");
                     var result = await connection.SendAsync("Network.getResponseBody", new { requestId }, cancellationToken,
                             string.IsNullOrEmpty(sessionId) ? null : sessionId)
                         .ConfigureAwait(false);
@@ -317,14 +388,16 @@ public sealed class CdpCaptureSource : ICaptureSource
                     var eventId = Convert.ToHexString(SHA256.HashData(prefix.Concat(body).ToArray()));
                     if (!_observedIds.TryAdd(eventId, 0)) continue;
                     if (_observedIds.Count > 4096) _observedIds.Clear();
-                    connection.Policy.TryExecuteIfCurrent(sessionId, requestId, generation,
-                        () => Publish(new ApiResponse(ApiPath, timestamp, body, eventId)));
+                    if (connection.Policy.TryExecuteIfCurrent(sessionId, requestId, generation,
+                            () => Publish(new ApiResponse(ApiPath, timestamp, body, eventId))))
+                        SetStatus("CDP接続中: 対象API本文を取得済み");
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex) when (ex is InvalidOperationException or JsonException or WebSocketException or
                                            IOException or TimeoutException or FormatException)
                 {
                     // A failed read is discarded. No retry or game request is issued.
+                    SetStatus("CDP接続中: 対象API本文の取得に失敗");
                 }
                 finally { connection.Policy.CompleteRequest(sessionId, requestId); }
             }
@@ -351,12 +424,13 @@ public sealed class CdpCaptureSource : ICaptureSource
         }
     }
 
-    private sealed record PageTarget(Uri WebSocketUrl);
+    private sealed record PageTarget(string TargetId, Uri WebSocketUrl);
+    private sealed record RequestPermit(long Generation, string FrameId, string LoaderId, bool ResponseValidated = false);
 
     private sealed class CdpConnection : IAsyncDisposable
     {
         private readonly ClientWebSocket _socket = CreateSocket();
-        private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement>> _pending = new();
+        private readonly ConcurrentDictionary<int, PendingCommand> _pending = new();
         private readonly System.Threading.Channels.Channel<CdpEvent> _events =
             System.Threading.Channels.Channel.CreateBounded<CdpEvent>(new System.Threading.Channels.BoundedChannelOptions(512)
             {
@@ -365,12 +439,15 @@ public sealed class CdpCaptureSource : ICaptureSource
                 SingleWriter = true
             });
         private readonly Uri _endpoint;
+        private readonly GameServer _server;
+        private readonly string _pageTargetId;
         private readonly SemaphoreSlim _sendLock = new(1, 1);
         private readonly CancellationTokenSource _readerStop = new();
         private Task? _reader;
         private int _nextId;
 
-        public CdpConnection(Uri endpoint, CdpCommandPolicy policy) { _endpoint = endpoint; Policy = policy; }
+        public CdpConnection(string pageTargetId, Uri endpoint, CdpCommandPolicy policy, GameServer server)
+        { _pageTargetId = pageTargetId; _endpoint = endpoint; Policy = policy; _server = server; }
         public CdpCommandPolicy Policy { get; }
         public System.Threading.Channels.ChannelReader<CdpEvent> Events => _events.Reader;
 
@@ -397,7 +474,7 @@ public sealed class CdpCaptureSource : ICaptureSource
                 throw new InvalidOperationException("CDP command was rejected by the fixed observation policy.");
             var id = Interlocked.Increment(ref _nextId);
             var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _pending[id] = completion;
+            _pending[id] = new PendingCommand(sessionId ?? string.Empty, completion);
             var payload = sessionId is null
                 ? JsonSerializer.SerializeToUtf8Bytes(new { id, method, @params = parameters })
                 : JsonSerializer.SerializeToUtf8Bytes(new { id, method, @params = parameters, sessionId });
@@ -406,7 +483,12 @@ public sealed class CdpCaptureSource : ICaptureSource
             try
             {
                 await _sendLock.WaitAsync(commandTimeout.Token).ConfigureAwait(false);
-                try { await _socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, commandTimeout.Token).ConfigureAwait(false); }
+                try
+                {
+                    if (!Policy.ValidateCommand(method, parameterDocument.RootElement, sessionId))
+                        throw new InvalidOperationException("CDP command was rejected by the fixed observation policy.");
+                    await _socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, commandTimeout.Token).ConfigureAwait(false);
+                }
                 finally { _sendLock.Release(); }
                 return await completion.Task.WaitAsync(commandTimeout.Token).ConfigureAwait(false);
             }
@@ -426,6 +508,8 @@ public sealed class CdpCaptureSource : ICaptureSource
                     {
                         result = await _socket.ReceiveAsync(buffer.AsMemory(), token).ConfigureAwait(false);
                         if (result.MessageType == WebSocketMessageType.Close) return;
+                        if (result.MessageType != WebSocketMessageType.Text)
+                            throw new InvalidDataException("CDP only accepts text messages.");
                         if (message.Length + result.Count > MaximumCdpMessageBytes)
                             throw new InvalidDataException("CDP message exceeded the local safety limit.");
                         await message.WriteAsync(buffer.AsMemory(0, result.Count), token).ConfigureAwait(false);
@@ -433,22 +517,33 @@ public sealed class CdpCaptureSource : ICaptureSource
 
                     using var document = JsonDocument.Parse(message.ToArray());
                     var root = document.RootElement;
-                    if (root.TryGetProperty("id", out var idElement) && idElement.TryGetInt32(out var id) &&
-                        _pending.TryRemove(id, out var completion))
+                    if (root.TryGetProperty("id", out var idElement) && idElement.TryGetInt32(out var id))
                     {
+                        if (!_pending.TryRemove(id, out var pendingCommand)) continue;
+                        var responseSession = root.TryGetProperty("sessionId", out var sessionElement)
+                            ? sessionElement.GetString() ?? string.Empty : string.Empty;
+                        if (responseSession != pendingCommand.SessionId)
+                        {
+                            pendingCommand.Completion.TrySetException(new IOException("CDP response session mismatch."));
+                            continue;
+                        }
                         if (root.TryGetProperty("error", out var error))
-                            completion.TrySetException(new InvalidOperationException(error.ToString()));
+                            pendingCommand.Completion.TrySetException(new InvalidOperationException("CDP command failed."));
                         else if (root.TryGetProperty("result", out var response))
-                            completion.TrySetResult(response.Clone());
+                            pendingCommand.Completion.TrySetResult(response.Clone());
                         else
-                            completion.TrySetException(new JsonException("CDP response has no result."));
+                            pendingCommand.Completion.TrySetException(new JsonException("CDP response has no result."));
                     }
+                    else if (root.TryGetProperty("id", out _)) continue;
                     else
                     {
                         var wasPageAllowed = Policy.IsPageAllowed;
-                        Policy.ObserveEvent(root);
+                        var approvedDirectGameOopif = IsApprovedDirectGameOopif(root);
+                        Policy.ObserveEvent(root, approvedDirectGameOopif);
                         var isPageAllowed = Policy.IsPageAllowed;
-                        if (!_events.Writer.TryWrite(new CdpEvent(root.Clone(), Policy.Generation, isPageAllowed,
+                        if (!TryProjectEvent(root, out var projected)) continue;
+                        using var projectedDocument = JsonDocument.Parse(projected);
+                        if (!_events.Writer.TryWrite(new CdpEvent(projectedDocument.RootElement.Clone(), Policy.Generation, isPageAllowed,
                                 wasPageAllowed != isPageAllowed)))
                         {
                             _socket.Abort();
@@ -462,10 +557,84 @@ public sealed class CdpCaptureSource : ICaptureSource
                                        System.Threading.Channels.ChannelClosedException) { }
             finally
             {
-                foreach (var pending in _pending.Values) pending.TrySetException(new IOException("CDP connection closed."));
+                foreach (var pending in _pending.Values) pending.Completion.TrySetException(new IOException("CDP connection closed."));
                 _pending.Clear();
                 _events.Writer.TryComplete();
             }
+        }
+
+        private bool IsApprovedDirectGameOopif(JsonElement root)
+        {
+            if (!root.TryGetProperty("method", out var method) || method.GetString() != "Target.attachedToTarget" ||
+                root.TryGetProperty("sessionId", out var outerSession) && outerSession.GetString() is { Length: > 0 } ||
+                !root.TryGetProperty("params", out var parameters) ||
+                !parameters.TryGetProperty("targetInfo", out var info) ||
+                !info.TryGetProperty("type", out var type) || type.GetString() != "iframe" ||
+                !info.TryGetProperty("targetId", out var targetId) || targetId.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(targetId.GetString()) ||
+                !info.TryGetProperty("parentId", out var parentId) || parentId.GetString() != _pageTargetId ||
+                !info.TryGetProperty("url", out var url) ||
+                !Uri.TryCreate(url.GetString(), UriKind.Absolute, out var frameUrl)) return false;
+            return KancolleCapturePolicy.IsAllowedGameFrame(frameUrl, _server);
+        }
+
+        private bool TryProjectEvent(JsonElement root, out byte[] projected)
+        {
+            projected = [];
+            if (!root.TryGetProperty("method", out var methodElement) || methodElement.GetString() is not { } method ||
+                !root.TryGetProperty("params", out var p) || p.ValueKind != JsonValueKind.Object) return false;
+            var session = root.TryGetProperty("sessionId", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+            string? Text(JsonElement e, string name, int max = 256) =>
+                e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String && v.GetString() is { } str && str.Length <= max ? str : null;
+            string SafeUrl(JsonElement e, string name, bool gamePage = false)
+            {
+                var raw = Text(e, name, 2048);
+                if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri)) return "about:blank";
+                var allowed = gamePage ? KancolleCapturePolicy.IsAllowedGamePage(uri) : KancolleCapturePolicy.IsAllowedApi(uri, _server);
+                return allowed ? uri.GetLeftPart(UriPartial.Path) : "about:blank";
+            }
+            bool IsApiPath(JsonElement e, string name)
+            {
+                var raw = Text(e, name, 2048);
+                return Uri.TryCreate(raw, UriKind.Absolute, out var uri) &&
+                       uri.AbsolutePath.Equals(KancolleCapturePolicy.ApiPath, StringComparison.Ordinal);
+            }
+            object? parameters = method switch
+            {
+                "Target.attachedToTarget" when p.TryGetProperty("targetInfo", out var info) => new
+                {
+                    sessionId = Text(p, "sessionId"),
+                    targetInfo = new
+                    {
+                        type = Text(info, "type"), parentFrameId = Text(info, "parentFrameId")
+                    },
+                    selectedGameOopif = IsApprovedDirectGameOopif(root)
+                },
+                "Target.detachedFromTarget" => new { sessionId = Text(p, "sessionId") },
+                "Page.frameNavigated" when p.TryGetProperty("frame", out var frame) => new
+                {
+                    frame = new { id = Text(frame, "id"), url = SafeUrl(frame, "url", gamePage: true),
+                        parentId = Text(frame, "parentId"), loaderId = Text(frame, "loaderId") }
+                },
+                "Page.navigatedWithinDocument" => new { frameId = Text(p, "frameId"), url = SafeUrl(p, "url", gamePage: true) },
+                "Page.frameAttached" => new { frameId = Text(p, "frameId"), parentFrameId = Text(p, "parentFrameId") },
+                "Page.frameDetached" => new { frameId = Text(p, "frameId") },
+                "Network.requestWillBeSent" when p.TryGetProperty("request", out var request) => new
+                {
+                    requestId = Text(p, "requestId"), frameId = Text(p, "frameId"), loaderId = Text(p, "loaderId"),
+                    request = new { url = SafeUrl(request, "url") }, apiPathMatches = IsApiPath(request, "url")
+                },
+                "Network.responseReceived" when p.TryGetProperty("response", out var response) => new
+                {
+                    requestId = Text(p, "requestId"), frameId = Text(p, "frameId"), loaderId = Text(p, "loaderId"),
+                    response = new { url = SafeUrl(response, "url"), status = response.TryGetProperty("status", out var status) && status.TryGetDouble(out var n) ? n : 0 }
+                },
+                "Network.loadingFinished" or "Network.loadingFailed" => new { requestId = Text(p, "requestId") },
+                _ => null
+            };
+            if (parameters is null) return false;
+            projected = JsonSerializer.SerializeToUtf8Bytes(new { method, @params = parameters, sessionId = session });
+            return projected.Length <= 4096;
         }
 
         public async ValueTask DisposeAsync()
@@ -500,7 +669,7 @@ public sealed class CdpCaptureSource : ICaptureSource
             public bool IsBypassed(Uri host) => true;
         }
 
+        private sealed record PendingCommand(string SessionId, TaskCompletionSource<JsonElement> Completion);
         public sealed record CdpEvent(JsonElement Message, long Generation, bool PageAllowed, bool PageStateChanged);
     }
 }
-

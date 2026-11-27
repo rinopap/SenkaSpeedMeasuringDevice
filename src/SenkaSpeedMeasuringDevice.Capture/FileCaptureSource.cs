@@ -247,4 +247,3 @@ public sealed class FileCaptureSource : ICaptureSource
         SingleWriter = false
     });
 }
-

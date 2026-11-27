@@ -42,4 +42,3 @@ public static class CsvStorage
         stream.Flush(flushToDisk: true);
     }
 }
-

@@ -36,4 +36,3 @@ public sealed class SenkaCalculatorTests
     private static ExperienceSample Sample(string time, long exp) => new(
         DateTimeOffset.Parse($"2026-11-26T{time}:00+09:00"), exp);
 }
-

@@ -40,4 +40,3 @@ public static class SenkaCalculator
             Line(twoBack, previous, r1, r2), Line(previous, current, r2, r3), Line(current, now, r3, latest));
     }
 }
-

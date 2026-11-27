@@ -15,4 +15,3 @@ public static class CdpEndpointPolicy
         endpoint.AbsolutePath.AsSpan("/devtools/page/".Length).IndexOf('/') < 0 &&
         (expectedTargetId is null || endpoint.AbsolutePath.Equals("/devtools/page/" + expectedTargetId, StringComparison.Ordinal));
 }
-

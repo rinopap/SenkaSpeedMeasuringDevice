@@ -23,4 +23,13 @@ public static class KancolleCapturePolicy
         uri.AbsolutePath.Equals(ApiPath, StringComparison.Ordinal) &&
         string.IsNullOrEmpty(uri.UserInfo) &&
         string.IsNullOrEmpty(uri.Fragment);
+
+    public static bool IsAllowedGameFrame(Uri uri, GameServer server) =>
+        uri.IsAbsoluteUri &&
+        uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+        uri.Port == 443 &&
+        uri.Host.Equals(server.ApiHost, StringComparison.OrdinalIgnoreCase) &&
+        uri.AbsolutePath.Equals("/kcs2/index.php", StringComparison.Ordinal) &&
+        string.IsNullOrEmpty(uri.UserInfo) &&
+        string.IsNullOrEmpty(uri.Fragment);
 }

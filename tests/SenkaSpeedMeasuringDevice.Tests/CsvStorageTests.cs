@@ -40,4 +40,3 @@ public sealed class CsvStorageTests
         finally { if (File.Exists(path)) File.Delete(path); }
     }
 }
-

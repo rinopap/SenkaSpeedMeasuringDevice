@@ -7,4 +7,3 @@ public sealed record ExperienceSnapshot(
     string EventId);
 
 public sealed record ExperienceSample(DateTimeOffset Timestamp, long Experience);
-

@@ -48,4 +48,3 @@ internal static class Program
         }
     }
 }
-

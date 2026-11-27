@@ -18,12 +18,52 @@ public sealed class AppSettingsTests
             Assert.False(loaded.AlwaysOnTop);
             Assert.True(loaded.CdpEnabled);
             Assert.Equal(9224, loaded.CdpDebugPort);
+            Assert.Equal("cdp", loaded.EffectiveCaptureMode);
             Assert.Null(loaded.ServerId);
             loaded.Save(path);
             var saved = File.ReadAllText(path);
             Assert.Contains("\"dark_mode\": true", saved);
             Assert.DoesNotContain("cdp_page_url", saved);
             Assert.DoesNotContain("cdp_api_hosts", saved);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public void NewConfigurationStartsWithCaptureDisabled()
+    {
+        var missingPath = Path.Combine(Path.GetTempPath(), $"senka-{Guid.NewGuid():N}.json");
+        Assert.Equal("off", AppSettings.Load(missingPath).EffectiveCaptureMode);
+    }
+
+    [Fact]
+    public void SavesSelectedCaptureModeAndBrowser()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"senka-{Guid.NewGuid():N}.json");
+        try
+        {
+            new AppSettings { CaptureMode = "cdp", CdpEnabled = true, BrowserId = "edge", ServerId = 7 }.Save(path);
+            var loaded = AppSettings.Load(path);
+            Assert.Equal("cdp", loaded.EffectiveCaptureMode);
+            Assert.Equal("edge", loaded.BrowserId);
+            Assert.Equal(7, loaded.ServerId);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Theory]
+    [InlineData("{\"cdp_enabled\":false}", "json")]
+    [InlineData("{\"cdp_enabled\":true}", "cdp")]
+    [InlineData("{\"capture_mode\":\"off\",\"cdp_enabled\":false}", "off")]
+    [InlineData("{\"capture_mode\":\"json\",\"cdp_enabled\":true}", "json")]
+    [InlineData("{\"capture_mode\":\"invalid\",\"cdp_enabled\":true}", "cdp")]
+    public void MigratesLegacyModeAndValidatesNewMode(string json, string expectedMode)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"senka-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, json);
+            Assert.Equal(expectedMode, AppSettings.Load(path).EffectiveCaptureMode);
         }
         finally { if (File.Exists(path)) File.Delete(path); }
     }

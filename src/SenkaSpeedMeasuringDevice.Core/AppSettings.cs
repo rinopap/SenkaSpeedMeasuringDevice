@@ -12,19 +12,34 @@ public sealed record AppSettings
     [JsonPropertyName("cdp_enabled")] public bool CdpEnabled { get; init; }
     [JsonPropertyName("cdp_debug_port")] public int CdpDebugPort { get; init; } = 9222;
     [JsonPropertyName("server_id")] public int? ServerId { get; init; }
+    [JsonPropertyName("capture_mode")] public string CaptureMode { get; init; } = "off";
+    [JsonPropertyName("browser_id")] public string? BrowserId { get; init; }
+
+    public string EffectiveCaptureMode => CaptureMode is "off" or "cdp" or "json"
+        ? CaptureMode
+        : CdpEnabled ? "cdp" : "json";
 
     public static AppSettings Load(string path)
     {
         if (!File.Exists(path)) return new AppSettings();
         try
         {
-            var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllBytes(path));
-            return loaded is null ? new AppSettings() : loaded with
+            var bytes = File.ReadAllBytes(path);
+            var loaded = JsonSerializer.Deserialize<AppSettings>(bytes);
+            if (loaded is null) return new AppSettings();
+            using var document = JsonDocument.Parse(bytes);
+            var hasCaptureMode = document.RootElement.ValueKind == JsonValueKind.Object &&
+                                 document.RootElement.TryGetProperty("capture_mode", out _);
+            return loaded with
             {
                 FontFamily = string.IsNullOrWhiteSpace(loaded.FontFamily) ? "Yu Gothic" : loaded.FontFamily,
                 FontSize = Math.Clamp(loaded.FontSize, 8, 24),
                 CdpDebugPort = loaded.CdpDebugPort is >= 1 and <= 65535 ? loaded.CdpDebugPort : 9222,
-                ServerId = loaded.ServerId is { } serverId && GameServerRegistry.TryGet(serverId, out _) ? serverId : null
+                ServerId = loaded.ServerId is { } serverId && GameServerRegistry.TryGet(serverId, out _) ? serverId : null,
+                CaptureMode = hasCaptureMode && loaded.CaptureMode is "off" or "cdp" or "json"
+                    ? loaded.CaptureMode
+                    : loaded.CdpEnabled ? "cdp" : "json",
+                BrowserId = loaded.BrowserId is "chrome" or "edge" or "74en" ? loaded.BrowserId : null
             };
         }
         catch (JsonException) { return new AppSettings(); }

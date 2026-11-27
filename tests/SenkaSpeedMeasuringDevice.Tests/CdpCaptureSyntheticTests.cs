@@ -15,10 +15,12 @@ public sealed class CdpCaptureSyntheticTests
     public async Task CapturesOnlySelectedServerResponsesOnTheCurrentGamePage()
     {
         Assert.True(GameServerRegistry.TryGet(20, out var server));
-        await using var fixture = new LocalCdpFixture();
+        await using var fixture = new LocalCdpFixture($"https://{server.ApiHost}/kcs2/index.php");
         var source = new CdpCaptureSource(new CdpCaptureOptions(fixture.Port, server.Id));
         var captured = new TaskCompletionSource<ApiResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var statuses = new ConcurrentQueue<string>();
         source.ResponseReceived += (_, response) => captured.TrySetResult(response);
+        source.StatusChanged += (_, status) => statuses.Enqueue(status);
 
         await source.StartAsync(CancellationToken.None);
         try
@@ -30,6 +32,7 @@ public sealed class CdpCaptureSyntheticTests
             {
                 frame = new { id = "main-frame", url = "https://example.invalid/" }
             });
+            await fixture.SendRequestAsync("blocked-off-page", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath);
             await fixture.SendEventAsync("Network.responseReceived", Response("blocked-off-page", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath));
             await fixture.SendEventAsync("Network.loadingFinished", new { requestId = "blocked-off-page" });
 
@@ -37,34 +40,68 @@ public sealed class CdpCaptureSyntheticTests
             {
                 frameId = "main-frame", url = KancolleCapturePolicy.GamePageUrl
             });
+            await WaitUntilAsync(() => statuses.Contains("CDP接続中: 対象APIを待機中"), TimeSpan.FromSeconds(5));
+            await fixture.SendRequestAsync("wrong-host", "https://w01y.kancolle-server.com" + KancolleCapturePolicy.ApiPath);
             await fixture.SendEventAsync("Network.responseReceived", Response("wrong-host", "https://w01y.kancolle-server.com" + KancolleCapturePolicy.ApiPath));
             await fixture.SendEventAsync("Network.loadingFinished", new { requestId = "wrong-host" });
+            await WaitUntilAsync(() => statuses.Contains("CDP接続中: 対象APIパスを検出しましたがホストまたはHTTPS条件が不一致"), TimeSpan.FromSeconds(5));
 
+            await fixture.SendRequestAsync("accepted", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath);
             await fixture.SendEventAsync("Network.responseReceived", Response("accepted", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath));
             await fixture.SendEventAsync("Network.loadingFinished", new { requestId = "accepted" });
             var response = await captured.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(KancolleCapturePolicy.ApiPath, response.ApiPath);
-            Assert.Equal("synthetic response body", Encoding.UTF8.GetString(response.ResponseBody.Span));
+            Assert.Contains("api_result", Encoding.UTF8.GetString(response.ResponseBody.Span));
+            await WaitUntilAsync(() => statuses.Contains("CDP接続中: 対象API本文を取得済み"), TimeSpan.FromSeconds(5));
 
-            await fixture.SendEventAsync("Page.frameAttached", new { frameId = "oopif-frame", parentFrameId = "main-frame" });
+            // CDP uses an empty loaderId for requests fetched from a worker. Such a request
+            // remains bound to its known frame, target session, requestId, and page generation.
+            var apiUrl = "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath;
+            await fixture.SendRequestAsync("worker-fetched", apiUrl, loaderId: string.Empty);
+            await fixture.SendEventAsync("Network.responseReceived", Response("worker-fetched", apiUrl, loaderId: string.Empty));
+            await fixture.SendEventAsync("Network.loadingFinished", new { requestId = "worker-fetched" });
+            await WaitUntilAsync(() => fixture.Commands.Count(command => command.Method == "Network.getResponseBody") == 2,
+                TimeSpan.FromSeconds(5));
+            Assert.Contains("CDP接続中: 対象API応答200を照合済み", statuses);
+
+            // A redirect or requestId reuse toward an unrelated destination must clear
+            // the prior body-read permit, even if a later response claims the API URL.
+            await fixture.SendRequestAsync("reused-id", apiUrl);
+            await fixture.SendRequestAsync("reused-id", "https://unrelated.invalid/redirected");
+            await fixture.SendEventAsync("Network.responseReceived", Response("reused-id", apiUrl));
+            await fixture.SendEventAsync("Network.loadingFinished", new { requestId = "reused-id" });
+
+            await fixture.SendRequestAsync("unknown-frame", apiUrl, frameId: "unknown-frame", loaderId: "main-loader");
+            await fixture.SendEventAsync("Network.responseReceived", Response("unknown-frame", apiUrl, "unknown-frame", "main-loader"));
+            await fixture.SendEventAsync("Network.loadingFinished", new { requestId = "unknown-frame" });
+
             await fixture.SendEventAsync("Target.attachedToTarget", new
             {
                 sessionId = "oopif-session",
-                targetInfo = new { type = "iframe", parentFrameId = "main-frame" }
+                // The selected game OOPIF is a direct child target, but its root frame
+                // is not present in the parent Page.getFrameTree. parentFrameId is omitted.
+                targetInfo = new
+                {
+                    type = "iframe", targetId = "oopif-frame", parentId = "synthetic",
+                    url = "https://" + server.ApiHost + "/kcs2/index.php"
+                }
             });
             await fixture.WaitForCommandAsync("Network.enable", "oopif-session", TimeSpan.FromSeconds(5));
-            await fixture.SendEventAsync("Network.responseReceived", Response("iframe-accepted", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath), "oopif-session");
+            await WaitUntilAsync(() => statuses.Contains("CDP接続中: ゲームiframeを監視中、対象APIを待機中"), TimeSpan.FromSeconds(5));
+            await fixture.SendRequestAsync("iframe-accepted", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath, "oopif-session", "oopif-frame", "oopif-loader");
+            await fixture.SendEventAsync("Network.responseReceived", Response("iframe-accepted", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath, "oopif-frame", "oopif-loader"), "oopif-session");
             await fixture.SendEventAsync("Network.loadingFinished", new { requestId = "iframe-accepted" }, "oopif-session");
             await WaitUntilAsync(() => fixture.Commands.Any(command => command.Method == "Network.getResponseBody" &&
                 command.SessionId == "oopif-session"), TimeSpan.FromSeconds(5));
 
             await fixture.SendEventAsync("Target.detachedFromTarget", new { sessionId = "oopif-session" });
-            await fixture.SendEventAsync("Network.responseReceived", Response("detached-rejected", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath), "oopif-session");
+            await fixture.SendRequestAsync("detached-rejected", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath, "oopif-session", "oopif-frame", "oopif-loader");
+            await fixture.SendEventAsync("Network.responseReceived", Response("detached-rejected", "https://" + server.ApiHost + KancolleCapturePolicy.ApiPath, "oopif-frame", "oopif-loader"), "oopif-session");
             await fixture.SendEventAsync("Network.loadingFinished", new { requestId = "detached-rejected" }, "oopif-session");
 
             await Task.Delay(150);
             var methods = fixture.Commands.Select(command => command.Method).ToArray();
-            Assert.Equal(2, methods.Count(method => method == "Network.getResponseBody"));
+            Assert.Equal(3, methods.Count(method => method == "Network.getResponseBody"));
             Assert.True(methods.Count(method => method == "Target.setAutoAttach") >= 3);
             Assert.True(methods.Count(method => method == "Network.disable") >= 1, string.Join(",", methods));
             Assert.All(methods, method => Assert.Contains(method, new[]
@@ -79,10 +116,20 @@ public sealed class CdpCaptureSyntheticTests
         }
     }
 
-    private static object Response(string requestId, string url) => new
+    private static object Response(string requestId, string url, string frameId = "main-frame", string loaderId = "main-loader") => new
     {
         requestId,
+        frameId,
+        loaderId,
         response = new { url, status = 200 }
+    };
+
+    private static object Request(string requestId, string url, string frameId, string loaderId) => new
+    {
+        requestId,
+        frameId,
+        loaderId,
+        request = new { url }
     };
 
     private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
@@ -93,6 +140,7 @@ public sealed class CdpCaptureSyntheticTests
 
     private sealed class LocalCdpFixture : IAsyncDisposable
     {
+        private readonly string _gameFrameUrl;
         private readonly HttpListener _listener = new();
         private readonly CancellationTokenSource _stop = new();
         private readonly TaskCompletionSource<WebSocket> _socketReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -101,8 +149,9 @@ public sealed class CdpCaptureSyntheticTests
         public int Port { get; }
         public ConcurrentQueue<(string Method, string? SessionId, JsonElement Parameters)> Commands { get; } = new();
 
-        public LocalCdpFixture()
+        public LocalCdpFixture(string gameFrameUrl)
         {
+            _gameFrameUrl = gameFrameUrl;
             using var reservation = new TcpListener(IPAddress.Loopback, 0);
             reservation.Start();
             Port = ((IPEndPoint)reservation.LocalEndpoint).Port;
@@ -136,6 +185,10 @@ public sealed class CdpCaptureSyntheticTests
             try { await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None); }
             finally { _sendGate.Release(); }
         }
+
+        public Task SendRequestAsync(string requestId, string url, string? sessionId = null,
+            string frameId = "main-frame", string loaderId = "main-loader") =>
+            SendEventAsync("Network.requestWillBeSent", Request(requestId, url, frameId, loaderId), sessionId);
 
         private async Task AcceptLoopAsync()
         {
@@ -202,18 +255,17 @@ public sealed class CdpCaptureSyntheticTests
                 Commands.Enqueue((method, sessionId, parameters));
                 object response = method switch
                 {
-                    "Page.getFrameTree" => new
-                    {
-                        frameTree = new { frame = new { id = "main-frame", url = KancolleCapturePolicy.GamePageUrl } }
-                    },
+                    "Page.getFrameTree" => sessionId is null
+                        ? (object)new { frameTree = new { frame = new { id = "main-frame", loaderId = "main-loader", url = KancolleCapturePolicy.GamePageUrl } } }
+                        : new { frameTree = new { frame = new { id = "oopif-frame", loaderId = "oopif-loader", parentId = "main-frame", url = _gameFrameUrl } } },
                     "Network.getResponseBody" => new
                     {
-                        body = Convert.ToBase64String(Encoding.UTF8.GetBytes("synthetic response body")),
+                        body = Convert.ToBase64String(Encoding.UTF8.GetBytes("{\"api_result\":1,\"api_data\":{\"api_basic\":{\"api_experience\":42}}}")),
                         base64Encoded = true
                     },
                     _ => new { }
                 };
-                var bytes = JsonSerializer.SerializeToUtf8Bytes(new { id, result = response });
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(new { id, result = response, sessionId });
                 await _sendGate.WaitAsync(_stop.Token);
                 try { await socket.SendAsync(bytes, WebSocketMessageType.Text, true, _stop.Token); }
                 finally { _sendGate.Release(); }
@@ -238,4 +290,3 @@ public sealed class CdpCaptureSyntheticTests
         }
     }
 }
-

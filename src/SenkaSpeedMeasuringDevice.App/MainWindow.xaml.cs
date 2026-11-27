@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Threading.Channels;
 using Forms = System.Windows.Forms;
 using SenkaSpeedMeasuringDevice.Capture;
 using SenkaSpeedMeasuringDevice.Core;
@@ -16,18 +17,35 @@ public partial class MainWindow : Window
     private readonly object _samplesLock = new();
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly DispatcherTimer _displayTimer;
+    private readonly Channel<CaptureItem> _captureQueue = Channel.CreateBounded<CaptureItem>(new BoundedChannelOptions(128)
+    {
+        FullMode = BoundedChannelFullMode.Wait,
+        SingleReader = true,
+        SingleWriter = false
+    });
+    private readonly Task _captureWorker;
     private AppSettings _settings;
     private ICaptureSource? _captureSource;
     private string? _captureSetupError;
     private bool _exitRequested;
+    private long _captureGeneration;
+    private long _captureQueuedBytes;
+    private EventHandler<ApiResponse>? _responseHandler;
 
     public MainWindow()
     {
         InitializeComponent();
+        _captureWorker = ProcessCaptureQueueAsync();
         _settings = AppSettings.Load(Path.Combine(_appDirectory, "ui_config.json"));
         _admiralSamples = CsvStorage.Load(Path.Combine(_appDirectory, "exp_log.csv"), "admiral_exp").ToList();
         _shipSamples = CsvStorage.Load(Path.Combine(_appDirectory, "ship_exp_log.csv"), "ship_total_exp").ToList();
-        try { SetCaptureSource(CreateCaptureSource(_settings)); }
+        try
+        {
+            var initialSource = CaptureStartPolicy.ShouldStartOnApplicationLaunch(_settings.EffectiveCaptureMode)
+                ? CreateCaptureSource(_settings)
+                : null;
+            if (initialSource is not null) SetCaptureSource(initialSource);
+        }
         catch (ArgumentException ex) { _captureSetupError = ex.Message; }
 
         _trayIcon = CreateTrayIcon();
@@ -45,7 +63,11 @@ public partial class MainWindow : Window
     {
         if (_captureSource is null)
         {
-            SetCaptureStatus($"CDP設定エラー: {_captureSetupError}");
+            SetCaptureStatus(_captureSetupError is not null
+                ? $"CDP設定エラー: {_captureSetupError}"
+                : _settings.EffectiveCaptureMode == "cdp"
+                    ? "計測停止中: 設定画面から計測開始してください"
+                    : "監視停止中");
             return;
         }
         try
@@ -84,51 +106,87 @@ public partial class MainWindow : Window
     {
         _captureSource = source;
         _captureSetupError = null;
-        source.ResponseReceived += OnResponseReceived;
+        var generation = AdvanceCaptureGeneration();
+        _responseHandler = (_, response) =>
+        {
+            var byteCount = response.ResponseBody.Length;
+            if (byteCount > 8 * 1024 * 1024 || Interlocked.Add(ref _captureQueuedBytes, byteCount) > 16 * 1024 * 1024)
+            {
+                Interlocked.Add(ref _captureQueuedBytes, -byteCount);
+                Dispatcher.InvokeAsync(() => SetCaptureStatus("取得キュー超過: 計測データを破棄しました"));
+                return;
+            }
+            if (!_captureQueue.Writer.TryWrite(new CaptureItem(generation, response, byteCount)))
+            {
+                Interlocked.Add(ref _captureQueuedBytes, -byteCount);
+                Dispatcher.InvokeAsync(() => SetCaptureStatus("取得キュー超過: 計測データを破棄しました"));
+            }
+        };
+        source.ResponseReceived += _responseHandler;
         if (source is CdpCaptureSource cdp) cdp.StatusChanged += OnCaptureStatusChanged;
     }
 
-    private ICaptureSource CreateCaptureSource(AppSettings settings)
+    private ICaptureSource? CreateCaptureSource(AppSettings settings)
     {
-        if (!settings.CdpEnabled) return new FileCaptureSource(Path.Combine(_appDirectory, "74en_responses"));
+        if (settings.EffectiveCaptureMode == "off") return null;
+        if (settings.EffectiveCaptureMode == "json") return new FileCaptureSource(Path.Combine(_appDirectory, "74en_responses"));
         if (settings.ServerId is not { } serverId)
             throw new ArgumentException("所属サーバーを選択してください。");
-        var options = new CdpCaptureOptions(settings.CdpDebugPort, serverId);
+        string? expectedProcessPath = null;
+        if (settings.BrowserId is "chrome" or "edge")
+        {
+            expectedProcessPath = BrowserCatalog.FindSupportedInstalled()
+                .FirstOrDefault(browser => browser.Id == settings.BrowserId)?.ExecutablePath;
+            if (expectedProcessPath is null)
+                throw new ArgumentException("選択したブラウザの署名済み実行ファイルを確認できません。");
+        }
+        var options = new CdpCaptureOptions(settings.CdpDebugPort, serverId, expectedProcessPath);
         return new CdpCaptureSource(options);
     }
 
     private void OnCaptureStatusChanged(object? sender, string status) =>
         Dispatcher.InvokeAsync(() => SetCaptureStatus(status));
 
-    private void OnResponseReceived(object? sender, ApiResponse response)
+    private async Task ProcessCaptureQueueAsync()
     {
-        var snapshot = ApiResponseParser.Parse(response);
-        if (snapshot is null) return;
-        var storageFailed = false;
-        lock (_samplesLock)
+        await foreach (var item in _captureQueue.Reader.ReadAllAsync())
         {
-            if (snapshot.AdmiralExperience is { } admiral)
+            Interlocked.Add(ref _captureQueuedBytes, -item.ByteCount);
+            var snapshot = ApiResponseParser.Parse(item.Response);
+            if (snapshot is null)
             {
-                var sample = new ExperienceSample(snapshot.Timestamp, admiral);
-                try { CsvStorage.Append(Path.Combine(_appDirectory, "exp_log.csv"), "admiral_exp", sample); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { storageFailed = true; }
-                _admiralSamples.Add(sample);
+                if (_settings.EffectiveCaptureMode == "cdp")
+                    await Dispatcher.InvokeAsync(() => SetCaptureStatus("CDP接続中: 本文を取得しましたが経験値データを解析できません"));
+                continue;
             }
-            if (snapshot.ShipTotalExperience is { } shipTotal)
+            var storageFailed = false;
+            lock (_samplesLock)
             {
-                var sample = new ExperienceSample(snapshot.Timestamp, shipTotal);
-                try { CsvStorage.Append(Path.Combine(_appDirectory, "ship_exp_log.csv"), "ship_total_exp", sample); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { storageFailed = true; }
-                _shipSamples.Add(sample);
+                if (item.Generation != Volatile.Read(ref _captureGeneration)) continue;
+                if (snapshot.AdmiralExperience is { } admiral)
+                {
+                    var sample = new ExperienceSample(snapshot.Timestamp, admiral);
+                    try { CsvStorage.Append(Path.Combine(_appDirectory, "exp_log.csv"), "admiral_exp", sample); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { storageFailed = true; }
+                    _admiralSamples.Add(sample);
+                }
+                if (snapshot.ShipTotalExperience is { } shipTotal)
+                {
+                    var sample = new ExperienceSample(snapshot.Timestamp, shipTotal);
+                    try { CsvStorage.Append(Path.Combine(_appDirectory, "ship_exp_log.csv"), "ship_total_exp", sample); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { storageFailed = true; }
+                    _shipSamples.Add(sample);
+                }
             }
-        }
 
-        Dispatcher.InvokeAsync(() =>
-        {
-            SetCaptureStatus(storageFailed ? "CSV書き込みエラー: データフォルダを確認してください" :
-                _settings.CdpEnabled ? "CDP接続中: 計測中" : "74EN JSON監視: 計測中");
-            RefreshDisplays();
-        });
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (item.Generation != Volatile.Read(ref _captureGeneration)) return;
+                SetCaptureStatus(storageFailed ? "CSV書き込みエラー: データフォルダを確認してください" :
+                    _settings.EffectiveCaptureMode == "cdp" ? "CDP接続中: 計測中" : "74EN JSON監視: 計測中");
+                RefreshDisplays();
+            });
+        }
     }
 
     private void SetCaptureStatus(string details)
@@ -140,11 +198,14 @@ public partial class MainWindow : Window
         {
             _ when details.StartsWith("74EN JSON監視", StringComparison.Ordinal) => "74EN JSON監視",
             _ when details.StartsWith("CDP接続中", StringComparison.Ordinal) && details.Contains("計測中", StringComparison.Ordinal) => "CDP計測中",
+            _ when details.StartsWith("CDP接続中: 対象APIを待機中", StringComparison.Ordinal) => "API待機中",
             _ when details.StartsWith("CDP接続中", StringComparison.Ordinal) => "CDP接続中",
             _ when details.StartsWith("CDP接続先を確認中", StringComparison.Ordinal) => "CDP確認中",
             _ when details.StartsWith("CDP接続待機中", StringComparison.Ordinal) => "CDP待機中",
             _ when details.StartsWith("CDP停止", StringComparison.Ordinal) => "CDP停止",
             _ when details.StartsWith("CDP設定エラー", StringComparison.Ordinal) => "CDP設定エラー",
+            _ when details.StartsWith("ログイン準備中", StringComparison.Ordinal) => "ログイン準備中",
+            _ when details.StartsWith("計測停止中", StringComparison.Ordinal) => "計測停止中",
             _ when details.StartsWith("CSV書き込みエラー", StringComparison.Ordinal) => "CSVエラー",
             _ when details.Contains("開始できません", StringComparison.Ordinal) => "取得エラー",
             _ => details
@@ -172,10 +233,11 @@ public partial class MainWindow : Window
     {
         var dialog = new SettingsWindow(_settings, WindowsStartup.IsEnabled()) { Owner = this };
         dialog.SettingsApplied += OnSettingsApplied;
+        dialog.StatusMessage += message => Dispatcher.InvokeAsync(() => SetCaptureStatus(message));
         dialog.ShowDialog();
     }
 
-    private async void OnSettingsApplied(AppSettings settings, bool autoStart)
+    private async void OnSettingsApplied(AppSettings settings, bool autoStart, bool startMeasurement)
     {
         try
         {
@@ -184,17 +246,29 @@ public partial class MainWindow : Window
             ApplySettings(settings);
             if (_captureSource is not null)
             {
-                _captureSource.ResponseReceived -= OnResponseReceived;
+                AdvanceCaptureGeneration();
+                if (_responseHandler is not null) _captureSource.ResponseReceived -= _responseHandler;
                 if (_captureSource is CdpCaptureSource oldCdp) oldCdp.StatusChanged -= OnCaptureStatusChanged;
                 await _captureSource.DisposeAsync();
                 _captureSource = null;
             }
             _settings = settings;
-            var newSource = CreateCaptureSource(settings);
-            SetCaptureSource(newSource);
-            await newSource.StartAsync(CancellationToken.None);
-            SetCaptureStatus(settings.CdpEnabled ? "CDP接続待機中" :
-                $"74EN JSON監視: {Path.Combine(_appDirectory, "74en_responses")}");
+            var shouldStartSource = CaptureStartPolicy.ShouldStartAfterSettingsApplied(
+                settings.EffectiveCaptureMode, startMeasurement);
+            var newSource = shouldStartSource ? CreateCaptureSource(settings) : null;
+            if (newSource is not null)
+            {
+                SetCaptureSource(newSource);
+                await newSource.StartAsync(CancellationToken.None);
+            }
+            SetCaptureStatus(settings.EffectiveCaptureMode switch
+            {
+                "cdp" => "CDP接続待機中",
+                "json" => $"74EN JSON監視: {Path.Combine(_appDirectory, "74en_responses")}",
+                _ => "監視停止中"
+            });
+            if (settings.EffectiveCaptureMode == "cdp" && !startMeasurement)
+                SetCaptureStatus("計測停止中: 設定画面から計測開始してください");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or
                                    ArgumentException or InvalidOperationException)
@@ -251,9 +325,19 @@ public partial class MainWindow : Window
         _trayIcon.Dispose();
         if (_captureSource is not null)
         {
-            _captureSource.ResponseReceived -= OnResponseReceived;
+            AdvanceCaptureGeneration();
+            if (_responseHandler is not null) _captureSource.ResponseReceived -= _responseHandler;
             await _captureSource.DisposeAsync();
         }
+        _captureQueue.Writer.TryComplete();
+        try { await _captureWorker; } catch (OperationCanceledException) { }
         System.Windows.Application.Current.Shutdown();
+    }
+
+    private sealed record CaptureItem(long Generation, ApiResponse Response, int ByteCount);
+
+    private long AdvanceCaptureGeneration()
+    {
+        lock (_samplesLock) return Interlocked.Increment(ref _captureGeneration);
     }
 }

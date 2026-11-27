@@ -76,7 +76,7 @@ public sealed class FileCaptureSourceTests
         {
             await source.StartAsync(CancellationToken.None);
             var target = Path.Combine(directory, "api_port@port_partial.json");
-            await File.WriteAllTextAsync(target, "svdata={\"api_data\":");
+            await File.WriteAllTextAsync(target, "svdata={\"api_result\":1,\"api_data\":");
             await Task.Delay(350);
             await File.AppendAllTextAsync(target, "{\"api_basic\":{\"api_experience\":789}}}");
             var response = await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -90,6 +90,5 @@ public sealed class FileCaptureSourceTests
     }
 
     private static string Json(long experience) =>
-        $"{{\"api_data\":{{\"api_basic\":{{\"api_experience\":{experience}}},\"api_ship\":[{{\"api_exp\":[100,0]}}]}}}}";
+        $"{{\"api_result\":1,\"api_data\":{{\"api_basic\":{{\"api_experience\":{experience}}},\"api_ship\":[{{\"api_exp\":[100,0]}}]}}}}";
 }
-

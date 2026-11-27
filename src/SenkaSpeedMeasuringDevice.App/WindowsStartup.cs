@@ -30,4 +30,3 @@ internal static class WindowsStartup
 
     private static string Unquote(string value) => value.Trim().Trim('"');
 }
-

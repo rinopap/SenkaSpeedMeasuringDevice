@@ -43,4 +43,3 @@
 - 専用プロファイルでブラウザ自身がログイン状態を保存するか、終了時に一時プロファイルを消すかは、利便性と「認証情報を保存しない」仕様の解釈に関わる。実装前に保存方針と利用者への説明を決定する。
 - 74ENの`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`はWebView2の追加ブラウザー引数へ足される方式として公開されているが、製品版の起動経路/単一起動処理を含む自動起動は未実装・未検証。[Microsoft WebView2資料](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/webview2-idl?view=webview2-1.0.864.35)
 - 現行版ではブラウザを自動起動しない。既存の手動CDP設定と74EN JSON監視を維持する。
-
