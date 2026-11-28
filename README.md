@@ -1,6 +1,6 @@
 # 戦果時速計測機
 
-**SenkaSpeedDevice2.0** は、ElectronicObserverEN（74EN）が標準保存するデータを読み取り、戦果時速と艦娘Exp時速を表示するWindows向け非公式補助ツールです。
+**SenkaSpeedMeasuringDevice v2.0.0** は、ElectronicObserverEN（74EN）が標準保存するデータを読み取り、戦果時速と艦娘Exp時速を表示するWindows向け非公式補助ツールです。
 
 ## 主な機能
 
@@ -18,7 +18,7 @@
 
 ## 使用方法
 
-1. [Releases](../../releases)から`SenkaSpeedDevice2.0-win-x64.zip`をダウンロードして展開します。
+1. [Releases](../../releases)から`SenkaSpeedMeasuringDevice-v2.0.0-win-x64.zip`をダウンロードして展開します。
 2. `SenkaSpeedMeasuringDevice.App.exe`を起動します。
 3. 必要に応じて設定画面で74ENの`Record\ElectronicObserver.sqlite`を指定します。
 

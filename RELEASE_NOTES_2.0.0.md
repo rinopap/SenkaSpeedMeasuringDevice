@@ -1,4 +1,4 @@
-# SenkaSpeedDevice2.0
+# SenkaSpeedMeasuringDevice v2.0.0
 
 戦果時速計測機の2.0.0を公開します。
 
@@ -22,7 +22,7 @@
 
 ## 使用方法
 
-1. `SenkaSpeedDevice2.0-win-x64.zip`を展開します。
+1. `SenkaSpeedMeasuringDevice-v2.0.0-win-x64.zip`を展開します。
 2. `SenkaSpeedMeasuringDevice.App.exe`を起動します。
 3. 必要に応じて設定画面で74ENの`Record\ElectronicObserver.sqlite`または互換JSON保存先を指定します。
 
