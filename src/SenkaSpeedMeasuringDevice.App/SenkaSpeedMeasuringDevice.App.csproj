@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Version>2.0.0</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
+    <InformationalVersion>2.0.0</InformationalVersion>
+    <AssemblyTitle>戦果時速計測機</AssemblyTitle>
+    <Product>戦果時速計測機</Product>
+    <Description>戦果時速計測機</Description>
+    <Copyright>Copyright (c) 2026 rino_pap</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SenkaSpeedMeasuringDevice.Core\SenkaSpeedMeasuringDevice.Core.csproj" />
+    <ProjectReference Include="..\SenkaSpeedMeasuringDevice.Capture\SenkaSpeedMeasuringDevice.Capture.csproj" />
+  </ItemGroup>
+
+</Project>
