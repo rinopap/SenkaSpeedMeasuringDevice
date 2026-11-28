@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+**/publish/
+.eo-dotnet-home/
+.vs/
+.idea/
+*.user
